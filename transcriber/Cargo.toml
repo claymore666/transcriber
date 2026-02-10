@@ -3,7 +3,7 @@ name = "transcriber"
 version = "0.1.0"
 edition = "2021"
 description = "Video/audio transcription library — URL or file in, transcript with timestamps out"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 
 [features]
 default = ["download"]
