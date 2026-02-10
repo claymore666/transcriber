@@ -4,3 +4,6 @@ Cargo.lock
 *.swo
 *~
 .DS_Store
+CLAUDE.md
+PLAN.md
+RESEARCH.md
