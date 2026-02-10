@@ -1,0 +1,16 @@
+[package]
+name = "transkribo-py"
+version = "0.1.0"
+edition = "2021"
+description = "Python bindings for transkribo transcription library"
+license = "MIT"
+
+[lib]
+name = "transkribo"
+crate-type = ["cdylib"]
+
+[dependencies]
+transkribo = { path = "../transkribo" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.23", features = ["tokio-runtime"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

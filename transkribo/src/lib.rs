@@ -1,0 +1,76 @@
+pub mod audio;
+pub mod config;
+#[cfg(feature = "download")]
+pub mod download;
+pub mod error;
+pub mod model;
+pub mod transcribe;
+pub mod types;
+
+pub use config::{AudioProcessing, Language, Model, TranscribeOptions};
+pub use error::{Error, Result};
+pub use types::{Segment, Transcript, Word};
+
+use std::path::Path;
+
+/// Transcribe a local audio/video file with default options.
+pub async fn transcribe_file(path: impl AsRef<Path>) -> Result<Transcript> {
+    transcribe_file_with_options(path, &TranscribeOptions::default()).await
+}
+
+/// Transcribe a local audio/video file with custom options.
+pub async fn transcribe_file_with_options(
+    path: impl AsRef<Path>,
+    options: &TranscribeOptions,
+) -> Result<Transcript> {
+    let path = path.as_ref();
+
+    // Ensure model is available
+    let cache_dir = options.resolve_cache_dir();
+    let model_path = model::ensure_model(&options.model, &cache_dir).await?;
+
+    // Load and process audio
+    let samples = audio::load_audio(path, &options.audio_processing)?;
+
+    // Transcribe
+    let transcript = transcribe::transcribe_samples(&samples, &model_path, options)?;
+
+    Ok(transcript)
+}
+
+/// Transcribe from a URL (downloads audio first, then transcribes).
+#[cfg(feature = "download")]
+pub async fn transcribe(url: &str) -> Result<Transcript> {
+    transcribe_with_options(url, &TranscribeOptions::default()).await
+}
+
+/// Transcribe from a URL with custom options.
+#[cfg(feature = "download")]
+pub async fn transcribe_with_options(
+    url: &str,
+    options: &TranscribeOptions,
+) -> Result<Transcript> {
+    let tmp_dir = std::env::temp_dir().join("transkribo");
+    let download_result = download::download_audio(url, &tmp_dir).await?;
+
+    // Ensure model is available
+    let cache_dir = options.resolve_cache_dir();
+    let model_path = model::ensure_model(&options.model, &cache_dir).await?;
+
+    // Load and process audio
+    let samples = audio::load_audio(&download_result.audio_path, &options.audio_processing)?;
+
+    // Transcribe
+    let mut transcript = transcribe::transcribe_samples(&samples, &model_path, options)?;
+
+    // Attach source metadata
+    transcript.source_url = Some(url.to_string());
+    transcript.source_title = download_result.title;
+
+    // Clean up downloaded file
+    if let Err(e) = std::fs::remove_file(&download_result.audio_path) {
+        tracing::warn!(error = %e, "failed to clean up downloaded audio");
+    }
+
+    Ok(transcript)
+}
