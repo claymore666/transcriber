@@ -50,11 +50,15 @@ pub async fn transcribe_with_options(
     url: &str,
     options: &TranscribeOptions,
 ) -> Result<Transcript> {
-    let tmp_dir = std::env::temp_dir().join("transcriber");
-    let download_result = download::download_audio(url, &tmp_dir).await?;
+    // Create a per-run temp directory so concurrent runs don't collide
+    // and the entire directory is cleaned up afterwards.
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "transcriber-{}",
+        std::process::id()
+    ));
+    let _cleanup = TempDirGuard(&tmp_dir);
 
-    // Clean up downloaded file on all exit paths (success or error)
-    let _cleanup = CleanupGuard(&download_result.audio_path);
+    let download_result = download::download_audio(url, &tmp_dir).await?;
 
     // Ensure model is available
     let cache_dir = options.resolve_cache_dir();
@@ -73,15 +77,17 @@ pub async fn transcribe_with_options(
     Ok(transcript)
 }
 
-/// RAII guard that removes a file when dropped.
+/// RAII guard that removes an entire temp directory when dropped.
 #[cfg(feature = "download")]
-struct CleanupGuard<'a>(&'a std::path::Path);
+struct TempDirGuard<'a>(&'a std::path::Path);
 
 #[cfg(feature = "download")]
-impl Drop for CleanupGuard<'_> {
+impl Drop for TempDirGuard<'_> {
     fn drop(&mut self) {
-        if let Err(e) = std::fs::remove_file(self.0) {
-            tracing::warn!(path = %self.0.display(), error = %e, "failed to clean up temp file");
+        if self.0.exists() {
+            if let Err(e) = std::fs::remove_dir_all(self.0) {
+                tracing::warn!(path = %self.0.display(), error = %e, "failed to clean up temp dir");
+            }
         }
     }
 }

@@ -10,6 +10,9 @@ use crate::error::{Error, Result};
 const HUGGINGFACE_BASE: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 
+/// Maximum model file size (5 GB). The largest whisper model (large-v3) is ~2.9 GB.
+const MAX_MODEL_BYTES: u64 = 5_000_000_000;
+
 /// Ensure a model is available locally, downloading if necessary.
 /// Returns the path to the model file.
 pub async fn ensure_model(model: &Model, cache_dir: &Path) -> Result<PathBuf> {
@@ -54,6 +57,13 @@ async fn download_model(url: &str, dest: &Path) -> Result<()> {
 
     let total_size = response.content_length().unwrap_or(0);
 
+    // Reject obviously wrong Content-Length before downloading
+    if total_size > MAX_MODEL_BYTES {
+        return Err(Error::ModelDownload(format!(
+            "model file too large ({total_size} bytes, max {MAX_MODEL_BYTES})"
+        )));
+    }
+
     let pb = ProgressBar::new(total_size);
     pb.set_style(
         ProgressStyle::default_bar()
@@ -68,8 +78,11 @@ async fn download_model(url: &str, dest: &Path) -> Result<()> {
             .unwrap_or_default()
     ));
 
-    // Write to a temp file first, then rename (atomic-ish)
-    let tmp_path = dest.with_extension("bin.part");
+    // Write to a unique temp file to avoid concurrent download corruption
+    let tmp_path = dest.with_extension(format!(
+        "bin.part.{}",
+        std::process::id()
+    ));
     let mut file = std::fs::File::create(&tmp_path)?;
     let mut stream = response.bytes_stream();
     let mut downloaded: u64 = 0;
@@ -77,8 +90,15 @@ async fn download_model(url: &str, dest: &Path) -> Result<()> {
     use std::io::Write;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
-        file.write_all(&chunk)?;
         downloaded += chunk.len() as u64;
+        if downloaded > MAX_MODEL_BYTES {
+            drop(file);
+            std::fs::remove_file(&tmp_path).ok();
+            return Err(Error::ModelDownload(format!(
+                "download exceeded max size ({MAX_MODEL_BYTES} bytes)"
+            )));
+        }
+        file.write_all(&chunk)?;
         pb.set_position(downloaded);
     }
 

@@ -5,6 +5,9 @@ use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
 
+/// Maximum bytes to read from yt-dlp stdout/stderr (10 MB).
+const MAX_SUBPROCESS_OUTPUT: usize = 10_000_000;
+
 /// Result of downloading audio from a URL.
 pub struct DownloadResult {
     pub audio_path: PathBuf,
@@ -71,8 +74,16 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
         .output()
         .await?;
 
-    let info: Option<YtDlpInfo> = if info_output.status.success() {
-        serde_json::from_slice(&info_output.stdout).ok()
+    let info: Option<YtDlpInfo> = if info_output.status.success()
+        && info_output.stdout.len() <= MAX_SUBPROCESS_OUTPUT
+    {
+        match serde_json::from_slice(&info_output.stdout) {
+            Ok(info) => Some(info),
+            Err(e) => {
+                warn!("failed to parse yt-dlp metadata: {e}");
+                None
+            }
+        }
     } else {
         None
     };
@@ -97,10 +108,13 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
         .await?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Limit error message length to avoid dumping huge stderr
-        let stderr_truncated: String = stderr.chars().take(1000).collect();
-        return Err(Error::Download(format!("yt-dlp failed: {stderr_truncated}")));
+        let stderr_bytes = &output.stderr[..output.stderr.len().min(4000)];
+        let stderr = String::from_utf8_lossy(stderr_bytes);
+        return Err(Error::Download(format!("yt-dlp failed: {stderr}")));
+    }
+
+    if output.stdout.len() > MAX_SUBPROCESS_OUTPUT {
+        return Err(Error::Download("yt-dlp produced unexpectedly large output".into()));
     }
 
     let audio_path_str = String::from_utf8_lossy(&output.stdout)

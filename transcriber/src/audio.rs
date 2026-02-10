@@ -14,6 +14,13 @@ const WHISPER_SAMPLE_RATE: u32 = 16_000;
 /// 8 hours at 16kHz mono f32 = ~1.8 GB.
 const MAX_AUDIO_DURATION_SECS: f64 = 8.0 * 3600.0;
 
+/// Maximum raw PCM bytes we accept from ffmpeg (2 GB).
+/// 8 hours at 16kHz mono s16le = ~922 MB, so 2 GB has plenty of headroom.
+const MAX_FFMPEG_OUTPUT_BYTES: usize = 2_000_000_000;
+
+/// Maximum stderr bytes to include in error messages.
+const MAX_STDERR_BYTES: usize = 4_000;
+
 /// Minimum RMS level — below this we consider the audio silent/empty.
 const MIN_RMS: f32 = 1e-6;
 
@@ -111,12 +118,28 @@ fn decode_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
         })?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = String::from_utf8_lossy(
+            &output.stderr[..output.stderr.len().min(MAX_STDERR_BYTES)],
+        );
         return Err(Error::AudioDecode(format!("ffmpeg failed: {stderr}")));
     }
 
     if output.stdout.is_empty() {
         return Err(Error::AudioDecode("ffmpeg produced no output".into()));
+    }
+
+    if output.stdout.len() > MAX_FFMPEG_OUTPUT_BYTES {
+        return Err(Error::AudioDecode(format!(
+            "ffmpeg output too large ({} bytes, max {})",
+            output.stdout.len(),
+            MAX_FFMPEG_OUTPUT_BYTES
+        )));
+    }
+
+    if output.stdout.len() % 2 != 0 {
+        return Err(Error::AudioDecode(
+            "ffmpeg produced odd byte count — expected s16le (2 bytes per sample)".into(),
+        ));
     }
 
     // Convert s16le bytes to f32 samples, normalized to [-1.0, 1.0]
