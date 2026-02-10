@@ -21,6 +21,9 @@ pub enum Error {
     #[error("unsupported language: \"{0}\" — use Language::supported() to list valid codes")]
     UnsupportedLanguage(String),
 
+    #[error("invalid option: {0}")]
+    InvalidOption(String),
+
     #[error("transcription error: {0}")]
     Transcription(String),
 

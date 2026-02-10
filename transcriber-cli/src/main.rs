@@ -205,7 +205,7 @@ async fn main() {
         }
     };
 
-    let mut opts = TranscribeOptions::new()
+    let mut opts = match TranscribeOptions::new()
         .model(model)
         .translate(cli.translate)
         .word_timestamps(cli.word_timestamps)
@@ -213,20 +213,32 @@ async fn main() {
         .gpu_device(cli.gpu_device)
         .vad(!cli.no_vad)
         .temperature(cli.temperature)
-        .audio_processing(
+    {
+        Ok(o) => o.audio_processing(
             transcriber::AudioProcessing::new()
                 .dc_offset_removal(cli.dc_offset)
                 .normalize(cli.normalize)
                 .trim_silence(cli.trim_silence),
-        );
+        ),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
 
     opts.language = language;
 
     if let Some(n) = cli.threads {
-        opts = opts.n_threads(n);
+        opts = match opts.n_threads(n) {
+            Ok(o) => o,
+            Err(e) => { eprintln!("Error: {e}"); std::process::exit(1); }
+        };
     }
     if let Some(size) = cli.beam_size {
-        opts = opts.beam_size(size);
+        opts = match opts.beam_size(size) {
+            Ok(o) => o,
+            Err(e) => { eprintln!("Error: {e}"); std::process::exit(1); }
+        };
     }
     if let Some(dir) = cli.cache_dir {
         opts = opts.cache_dir(dir);

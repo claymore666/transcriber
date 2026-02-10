@@ -308,9 +308,12 @@ impl TranscribeOptions {
         self
     }
 
-    pub fn n_threads(mut self, n: u32) -> Self {
+    pub fn n_threads(mut self, n: u32) -> Result<Self, Error> {
+        if n == 0 {
+            return Err(Error::InvalidOption("n_threads must be >= 1".into()));
+        }
         self.n_threads = Some(n);
-        self
+        Ok(self)
     }
 
     pub fn gpu(mut self, enabled: bool) -> Self {
@@ -328,14 +331,22 @@ impl TranscribeOptions {
         self
     }
 
-    pub fn temperature(mut self, temp: f32) -> Self {
+    pub fn temperature(mut self, temp: f32) -> Result<Self, Error> {
+        if !(0.0..=1.0).contains(&temp) {
+            return Err(Error::InvalidOption(
+                "temperature must be between 0.0 and 1.0".into(),
+            ));
+        }
         self.temperature = temp;
-        self
+        Ok(self)
     }
 
-    pub fn beam_size(mut self, size: u32) -> Self {
+    pub fn beam_size(mut self, size: u32) -> Result<Self, Error> {
+        if size == 0 {
+            return Err(Error::InvalidOption("beam_size must be >= 1".into()));
+        }
         self.beam_size = Some(size);
-        self
+        Ok(self)
     }
 
     pub fn cache_dir(mut self, dir: PathBuf) -> Self {
@@ -553,9 +564,9 @@ mod tests {
             .word_timestamps(true)
             .gpu(false)
             .vad(false)
-            .temperature(0.5)
-            .beam_size(5)
-            .n_threads(4);
+            .temperature(0.5).unwrap()
+            .beam_size(5).unwrap()
+            .n_threads(4).unwrap();
 
         assert!(matches!(opts.model, Model::Tiny));
         assert!(opts.translate);
@@ -574,6 +585,29 @@ mod tests {
 
         let opts = TranscribeOptions::new().language("gibberish");
         assert!(opts.is_err());
+    }
+
+    #[test]
+    fn test_options_temperature_validation() {
+        assert!(TranscribeOptions::new().temperature(0.0).is_ok());
+        assert!(TranscribeOptions::new().temperature(1.0).is_ok());
+        assert!(TranscribeOptions::new().temperature(0.5).is_ok());
+        assert!(TranscribeOptions::new().temperature(-0.1).is_err());
+        assert!(TranscribeOptions::new().temperature(1.1).is_err());
+    }
+
+    #[test]
+    fn test_options_beam_size_validation() {
+        assert!(TranscribeOptions::new().beam_size(1).is_ok());
+        assert!(TranscribeOptions::new().beam_size(5).is_ok());
+        assert!(TranscribeOptions::new().beam_size(0).is_err());
+    }
+
+    #[test]
+    fn test_options_n_threads_validation() {
+        assert!(TranscribeOptions::new().n_threads(1).is_ok());
+        assert!(TranscribeOptions::new().n_threads(16).is_ok());
+        assert!(TranscribeOptions::new().n_threads(0).is_err());
     }
 
     #[test]
