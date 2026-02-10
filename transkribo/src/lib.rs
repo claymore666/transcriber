@@ -53,6 +53,9 @@ pub async fn transcribe_with_options(
     let tmp_dir = std::env::temp_dir().join("transkribo");
     let download_result = download::download_audio(url, &tmp_dir).await?;
 
+    // Clean up downloaded file on all exit paths (success or error)
+    let _cleanup = CleanupGuard(&download_result.audio_path);
+
     // Ensure model is available
     let cache_dir = options.resolve_cache_dir();
     let model_path = model::ensure_model(&options.model, &cache_dir).await?;
@@ -67,10 +70,18 @@ pub async fn transcribe_with_options(
     transcript.source_url = Some(url.to_string());
     transcript.source_title = download_result.title;
 
-    // Clean up downloaded file
-    if let Err(e) = std::fs::remove_file(&download_result.audio_path) {
-        tracing::warn!(error = %e, "failed to clean up downloaded audio");
-    }
-
     Ok(transcript)
+}
+
+/// RAII guard that removes a file when dropped.
+#[cfg(feature = "download")]
+struct CleanupGuard<'a>(&'a std::path::Path);
+
+#[cfg(feature = "download")]
+impl Drop for CleanupGuard<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(self.0) {
+            tracing::warn!(path = %self.0.display(), error = %e, "failed to clean up temp file");
+        }
+    }
 }

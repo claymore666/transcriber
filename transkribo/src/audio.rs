@@ -9,6 +9,11 @@ use crate::error::{Error, Result};
 /// Target sample rate for whisper.cpp.
 const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
+/// Maximum audio duration in seconds (8 hours).
+/// Prevents unbounded memory allocation from very long audio files.
+/// 8 hours at 16kHz mono f32 = ~1.8 GB.
+const MAX_AUDIO_DURATION_SECS: f64 = 8.0 * 3600.0;
+
 /// Minimum RMS level — below this we consider the audio silent/empty.
 const MIN_RMS: f32 = 1e-6;
 
@@ -39,6 +44,13 @@ pub fn load_audio(path: &Path, processing: &AudioProcessing) -> Result<Vec<f32>>
         duration_secs = format!("{duration_raw:.1}"),
         "decoded audio"
     );
+
+    if duration_raw > MAX_AUDIO_DURATION_SECS {
+        return Err(Error::AudioDecode(format!(
+            "audio too long ({:.0}s) — maximum supported duration is {:.0}s",
+            duration_raw, MAX_AUDIO_DURATION_SECS
+        )));
+    }
 
     // Optional processing steps
     if processing.dc_offset_removal {
@@ -464,5 +476,26 @@ mod tests {
         assert!((db_to_linear(-20.0) - 0.1).abs() < 1e-6);
         assert!((db_to_linear(-40.0) - 0.01).abs() < 1e-6);
         assert!((db_to_linear(-60.0) - 0.001).abs() < 1e-5);
+    }
+
+    // --- Security tests ---
+
+    #[test]
+    fn test_load_rejects_nonexistent() {
+        let result = load_audio(
+            &PathBuf::from("/nonexistent/../../etc/passwd"),
+            &AudioProcessing::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_rejects_non_audio_file() {
+        // Try to load a text file — ffmpeg should fail
+        let tmp = std::env::temp_dir().join("transkribo_test_not_audio.txt");
+        std::fs::write(&tmp, "this is not audio").unwrap();
+        let result = load_audio(&tmp, &AudioProcessing::default());
+        assert!(result.is_err());
+        std::fs::remove_file(&tmp).ok();
     }
 }
