@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_list_cached_models_empty_dir() {
-        let tmp = std::env::temp_dir().join("transkribo_test_empty_cache");
+        let tmp = std::env::temp_dir().join("transcriber_test_empty_cache");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn test_list_cached_models_finds_bin_files() {
-        let tmp = std::env::temp_dir().join("transkribo_test_list_cache");
+        let tmp = std::env::temp_dir().join("transcriber_test_list_cache");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 
@@ -170,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_model_custom_exists() {
-        let tmp = std::env::temp_dir().join("transkribo_test_custom_model.bin");
+        let tmp = std::env::temp_dir().join("transcriber_test_custom_model.bin");
         fs::write(&tmp, b"fake model data").unwrap();
 
         let model = Model::Custom(tmp.clone());
@@ -191,7 +191,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ensure_model_uses_cache() {
-        let tmp = std::env::temp_dir().join("transkribo_test_model_cache");
+        let tmp = std::env::temp_dir().join("transcriber_test_model_cache");
         let _ = fs::remove_dir_all(&tmp);
         fs::create_dir_all(&tmp).unwrap();
 

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-/// All errors that can occur in transkribo.
+/// All errors that can occur in transcriber.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("model error: {0}")]

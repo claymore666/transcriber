@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
-use transkribo::{Language, Model, TranscribeOptions};
+use transcriber::{Language, Model, TranscribeOptions};
 
 #[derive(Parser)]
-#[command(name = "transkribo", about = "Transcribe audio/video from URL or file")]
+#[command(name = "transcriber", about = "Transcribe audio/video from URL or file")]
 struct Cli {
     /// URL or local file path to transcribe.
     #[arg(required_unless_present_any = ["list_models", "download_model", "list_languages"])]
@@ -102,7 +102,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("transkribo=info".parse().unwrap()),
+                .add_directive("transcriber=info".parse().unwrap()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -138,7 +138,7 @@ async fn main() {
 
         let opts = TranscribeOptions::default();
         let cache_dir = opts.resolve_cache_dir();
-        let cached = transkribo::model::list_cached_models(&cache_dir);
+        let cached = transcriber::model::list_cached_models(&cache_dir);
         if !cached.is_empty() {
             println!("\nCached models in {}:", cache_dir.display());
             for path in cached {
@@ -168,7 +168,7 @@ async fn main() {
         };
         let opts = TranscribeOptions::default();
         let cache_dir = cli.cache_dir.unwrap_or_else(|| opts.resolve_cache_dir());
-        match transkribo::model::ensure_model(&model, &cache_dir).await {
+        match transcriber::model::ensure_model(&model, &cache_dir).await {
             Ok(path) => println!("Model ready: {}", path.display()),
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -214,7 +214,7 @@ async fn main() {
         .vad(!cli.no_vad)
         .temperature(cli.temperature)
         .audio_processing(
-            transkribo::AudioProcessing::new()
+            transcriber::AudioProcessing::new()
                 .dc_offset_removal(cli.dc_offset)
                 .normalize(cli.normalize)
                 .trim_silence(cli.trim_silence),
@@ -236,9 +236,9 @@ async fn main() {
     let is_url = input.starts_with("http://") || input.starts_with("https://");
 
     let result = if is_url {
-        transkribo::transcribe_with_options(&input, &opts).await
+        transcriber::transcribe_with_options(&input, &opts).await
     } else {
-        transkribo::transcribe_file_with_options(&input, &opts).await
+        transcriber::transcribe_file_with_options(&input, &opts).await
     };
 
     let transcript = match result {

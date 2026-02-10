@@ -1,12 +1,12 @@
 [package]
-name = "transkribo-cli"
+name = "transcriber-cli"
 version = "0.1.0"
 edition = "2021"
-description = "CLI for transkribo transcription library"
+description = "CLI for transcriber transcription library"
 license = "MIT"
 
 [dependencies]
-transkribo = { path = "../transkribo", features = ["download"] }
+transcriber = { path = "../transcriber", features = ["download"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 indicatif = "0.17"

@@ -246,14 +246,14 @@ mod tests {
 
     #[test]
     fn test_validate_path_in_dir_traversal() {
-        let dir = std::env::temp_dir().join("transkribo_test");
+        let dir = std::env::temp_dir().join("transcriber_test");
         let path = PathBuf::from("/etc/passwd");
         assert!(validate_path_in_dir(&path, &dir).is_err());
     }
 
     #[test]
     fn test_validate_path_in_dir_parent_traversal() {
-        let dir = std::env::temp_dir().join("transkribo_test");
+        let dir = std::env::temp_dir().join("transcriber_test");
         let path = dir.join("..").join("..").join("etc").join("passwd");
         assert!(validate_path_in_dir(&path, &dir).is_err());
     }

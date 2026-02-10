@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn test_load_rejects_non_audio_file() {
         // Try to load a text file — ffmpeg should fail
-        let tmp = std::env::temp_dir().join("transkribo_test_not_audio.txt");
+        let tmp = std::env::temp_dir().join("transcriber_test_not_audio.txt");
         std::fs::write(&tmp, "this is not audio").unwrap();
         let result = load_audio(&tmp, &AudioProcessing::default());
         assert!(result.is_err());

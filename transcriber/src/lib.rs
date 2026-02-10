@@ -50,7 +50,7 @@ pub async fn transcribe_with_options(
     url: &str,
     options: &TranscribeOptions,
 ) -> Result<Transcript> {
-    let tmp_dir = std::env::temp_dir().join("transkribo");
+    let tmp_dir = std::env::temp_dir().join("transcriber");
     let download_result = download::download_audio(url, &tmp_dir).await?;
 
     // Clean up downloaded file on all exit paths (success or error)

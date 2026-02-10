@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "transkribo",
-    "transkribo-cli",
-    "transkribo-py",
+    "transcriber",
+    "transcriber-cli",
+    "transcriber-py",
 ]
 resolver = "2"

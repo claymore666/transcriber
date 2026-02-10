@@ -348,12 +348,12 @@ impl TranscribeOptions {
         self
     }
 
-    /// Resolve the cache directory, defaulting to ~/.cache/transkribo/models.
+    /// Resolve the cache directory, defaulting to ~/.cache/transcriber/models.
     pub fn resolve_cache_dir(&self) -> PathBuf {
         self.cache_dir.clone().unwrap_or_else(|| {
             dirs::cache_dir()
                 .unwrap_or_else(|| PathBuf::from(".cache"))
-                .join("transkribo")
+                .join("transcriber")
                 .join("models")
         })
     }
@@ -580,7 +580,7 @@ mod tests {
     fn test_options_resolve_cache_dir_default() {
         let opts = TranscribeOptions::default();
         let cache = opts.resolve_cache_dir();
-        assert!(cache.ends_with("transkribo/models"));
+        assert!(cache.ends_with("transcriber/models"));
     }
 
     #[test]
