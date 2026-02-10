@@ -46,3 +46,60 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display_model() {
+        let e = Error::Model("bad model".into());
+        assert_eq!(e.to_string(), "model error: bad model");
+    }
+
+    #[test]
+    fn test_error_display_model_not_found() {
+        let e = Error::ModelNotFound {
+            path: PathBuf::from("/tmp/model.bin"),
+        };
+        assert!(e.to_string().contains("/tmp/model.bin"));
+    }
+
+    #[test]
+    fn test_error_display_audio_not_found() {
+        let e = Error::AudioNotFound {
+            path: PathBuf::from("/tmp/audio.wav"),
+        };
+        assert!(e.to_string().contains("/tmp/audio.wav"));
+    }
+
+    #[test]
+    fn test_error_display_unsupported_language() {
+        let e = Error::UnsupportedLanguage("klingon".into());
+        let msg = e.to_string();
+        assert!(msg.contains("klingon"));
+        assert!(msg.contains("Language::supported()"));
+    }
+
+    #[test]
+    fn test_error_from_io() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let e: Error = io_err.into();
+        assert!(matches!(e, Error::Io(_)));
+        assert!(e.to_string().contains("file not found"));
+    }
+
+    #[test]
+    fn test_error_from_json() {
+        let json_err = serde_json::from_str::<String>("invalid json").unwrap_err();
+        let e: Error = json_err.into();
+        assert!(matches!(e, Error::Json(_)));
+    }
+
+    #[test]
+    fn test_error_debug_impl() {
+        let e = Error::AudioDecode("test error".into());
+        let debug = format!("{:?}", e);
+        assert!(debug.contains("AudioDecode"));
+    }
+}

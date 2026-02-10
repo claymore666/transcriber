@@ -227,3 +227,242 @@ fn rms(samples: &[f32]) -> f32 {
 fn db_to_linear(db: f32) -> f32 {
     10.0f32.powf(db / 20.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::config::AudioProcessing;
+
+    fn fixtures_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    }
+
+    // --- ffmpeg decoding tests ---
+
+    #[test]
+    fn test_load_wav() {
+        let path = fixtures_dir().join("sine_440hz_2s.wav");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        // 2 seconds at 16kHz = 32000 samples (roughly)
+        assert!(samples.len() > 30_000);
+        assert!(samples.len() < 34_000);
+    }
+
+    #[test]
+    fn test_load_mp3() {
+        let path = fixtures_dir().join("sine_440hz_1s.mp3");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        // 1 second at 16kHz = ~16000 samples
+        assert!(samples.len() > 14_000);
+        assert!(samples.len() < 18_000);
+    }
+
+    #[test]
+    fn test_load_opus() {
+        let path = fixtures_dir().join("sine_440hz_1s.opus");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        assert!(samples.len() > 14_000);
+        assert!(samples.len() < 18_000);
+    }
+
+    #[test]
+    fn test_load_flac() {
+        let path = fixtures_dir().join("sine_48khz_1s.flac");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        // Resampled from 48kHz to 16kHz, 1 second
+        assert!(samples.len() > 14_000);
+        assert!(samples.len() < 18_000);
+    }
+
+    #[test]
+    fn test_load_stereo_downmix() {
+        let path = fixtures_dir().join("stereo_2s.wav");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        // Should be mono after ffmpeg -ac 1
+        assert!(samples.len() > 30_000);
+        assert!(samples.len() < 34_000);
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        let path = fixtures_dir().join("does_not_exist.wav");
+        let result = load_audio(&path, &AudioProcessing::default());
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::AudioNotFound { .. }));
+    }
+
+    #[test]
+    fn test_samples_in_valid_range() {
+        let path = fixtures_dir().join("sine_440hz_2s.wav");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        for &s in &samples {
+            assert!(s >= -1.0 && s <= 1.0, "sample {s} out of range");
+        }
+    }
+
+    // --- DC offset removal tests ---
+
+    #[test]
+    fn test_dc_offset_removal() {
+        let mut samples = vec![0.5, 0.6, 0.4, 0.5, 0.7, 0.3];
+        let mean_before: f32 = samples.iter().sum::<f32>() / samples.len() as f32;
+        assert!(mean_before.abs() > 0.1);
+
+        remove_dc_offset(&mut samples);
+
+        let mean_after: f32 = samples.iter().sum::<f32>() / samples.len() as f32;
+        assert!(mean_after.abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_dc_offset_removal_empty() {
+        let mut samples: Vec<f32> = vec![];
+        remove_dc_offset(&mut samples); // should not panic
+    }
+
+    #[test]
+    fn test_dc_offset_removal_zero_mean() {
+        let mut samples = vec![-0.5, 0.5, -0.5, 0.5];
+        let original = samples.clone();
+        remove_dc_offset(&mut samples);
+        // Mean is already ~0, samples should be unchanged
+        for (a, b) in samples.iter().zip(original.iter()) {
+            assert!((a - b).abs() < 1e-5);
+        }
+    }
+
+    // --- Peak normalization tests ---
+
+    #[test]
+    fn test_normalize_peak() {
+        let mut samples = vec![0.1, -0.2, 0.3, -0.15, 0.25];
+        normalize_peak(&mut samples);
+
+        let peak = samples.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
+        assert!((peak - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_normalize_already_normalized() {
+        let mut samples = vec![0.5, -1.0, 0.7, -0.3];
+        let original = samples.clone();
+        normalize_peak(&mut samples);
+        // Peak is already 1.0, should be unchanged
+        for (a, b) in samples.iter().zip(original.iter()) {
+            assert!((a - b).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn test_normalize_silent() {
+        let mut samples = vec![0.0, 0.0, 0.0];
+        normalize_peak(&mut samples); // should not panic or divide by zero
+        assert!(samples.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn test_normalize_empty() {
+        let mut samples: Vec<f32> = vec![];
+        normalize_peak(&mut samples); // should not panic
+    }
+
+    // --- Silence trimming tests ---
+
+    #[test]
+    fn test_trim_silence_leading() {
+        // 1 second of silence + 1 second of signal
+        let mut samples = vec![0.0; 16_000];
+        samples.extend(vec![0.5; 16_000]);
+
+        let trimmed = trim_silence(&samples, -40.0, 50);
+        assert!(trimmed.len() < samples.len());
+        // Should have trimmed most of the leading silence
+        assert!(trimmed.len() < 18_000);
+    }
+
+    #[test]
+    fn test_trim_silence_trailing() {
+        // 1 second of signal + 1 second of silence
+        let mut samples = vec![0.5; 16_000];
+        samples.extend(vec![0.0; 16_000]);
+
+        let trimmed = trim_silence(&samples, -40.0, 50);
+        assert!(trimmed.len() < samples.len());
+        assert!(trimmed.len() < 18_000);
+    }
+
+    #[test]
+    fn test_trim_silence_both_sides() {
+        // silence + signal + silence
+        let mut samples = vec![0.0; 16_000];
+        samples.extend(vec![0.5; 16_000]);
+        samples.extend(vec![0.0; 16_000]);
+
+        let trimmed = trim_silence(&samples, -40.0, 50);
+        assert!(trimmed.len() < samples.len());
+        // Should be roughly 1 second of signal + padding
+        assert!(trimmed.len() < 20_000);
+    }
+
+    #[test]
+    fn test_trim_silence_no_silence() {
+        let samples = vec![0.5; 16_000];
+        let trimmed = trim_silence(&samples, -40.0, 50);
+        assert_eq!(trimmed.len(), samples.len());
+    }
+
+    #[test]
+    fn test_trim_silence_all_silent() {
+        let samples = vec![0.0; 16_000];
+        let trimmed = trim_silence(&samples, -40.0, 50);
+        // Should return original since there's no active audio
+        assert_eq!(trimmed.len(), samples.len());
+    }
+
+    #[test]
+    fn test_trim_silence_empty() {
+        let trimmed = trim_silence(&[], -40.0, 50);
+        assert!(trimmed.is_empty());
+    }
+
+    // --- Audio processing integration ---
+
+    #[test]
+    fn test_load_with_all_processing() {
+        let path = fixtures_dir().join("sine_440hz_2s.wav");
+        let samples = load_audio(&path, &AudioProcessing::all()).unwrap();
+        assert!(!samples.is_empty());
+
+        let peak = samples.iter().copied().map(f32::abs).fold(0.0f32, f32::max);
+        assert!((peak - 1.0).abs() < 0.01, "should be normalized, peak={peak}");
+    }
+
+    #[test]
+    fn test_load_with_no_processing() {
+        let path = fixtures_dir().join("sine_440hz_2s.wav");
+        let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
+        assert!(!samples.is_empty());
+    }
+
+    // --- Helper function tests ---
+
+    #[test]
+    fn test_rms() {
+        assert_eq!(rms(&[]), 0.0);
+        assert!((rms(&[1.0, 1.0, 1.0]) - 1.0).abs() < 1e-6);
+        assert!((rms(&[0.0, 0.0, 0.0])).abs() < 1e-6);
+
+        // RMS of [1, -1, 1, -1] = 1.0
+        assert!((rms(&[1.0, -1.0, 1.0, -1.0]) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_db_to_linear() {
+        assert!((db_to_linear(0.0) - 1.0).abs() < 1e-6);
+        assert!((db_to_linear(-20.0) - 0.1).abs() < 1e-6);
+        assert!((db_to_linear(-40.0) - 0.01).abs() < 1e-6);
+        assert!((db_to_linear(-60.0) - 0.001).abs() < 1e-5);
+    }
+}

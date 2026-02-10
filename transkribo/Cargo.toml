@@ -23,3 +23,6 @@ dirs = "6"
 reqwest = { version = "0.12", features = ["stream"] }
 indicatif = "0.17"
 futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

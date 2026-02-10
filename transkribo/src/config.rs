@@ -358,3 +358,234 @@ impl TranscribeOptions {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Language tests ---
+
+    #[test]
+    fn test_language_auto() {
+        let lang = Language::Auto;
+        assert!(lang.is_auto());
+        assert_eq!(lang.code(), None);
+        assert_eq!(lang.to_string(), "auto");
+    }
+
+    #[test]
+    fn test_language_from_code() {
+        let lang = Language::new("en").unwrap();
+        assert!(!lang.is_auto());
+        assert_eq!(lang.code(), Some("en"));
+        assert_eq!(lang.to_string(), "en");
+    }
+
+    #[test]
+    fn test_language_from_full_name() {
+        let lang = Language::new("german").unwrap();
+        assert_eq!(lang.code(), Some("de"));
+    }
+
+    #[test]
+    fn test_language_from_full_name_english() {
+        let lang = Language::new("english").unwrap();
+        assert_eq!(lang.code(), Some("en"));
+    }
+
+    #[test]
+    fn test_language_auto_string() {
+        let lang = Language::new("auto").unwrap();
+        assert!(lang.is_auto());
+    }
+
+    #[test]
+    fn test_language_case_insensitive() {
+        let lang = Language::new("EN").unwrap();
+        assert_eq!(lang.code(), Some("en"));
+
+        let lang = Language::new("German").unwrap();
+        assert_eq!(lang.code(), Some("de"));
+    }
+
+    #[test]
+    fn test_language_invalid() {
+        let result = Language::new("klingon");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_language_invalid_empty() {
+        let result = Language::new("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_language_supported_list() {
+        let supported = Language::supported();
+        assert!(supported.len() >= 50); // whisper supports ~100 languages
+        assert!(supported.iter().any(|(code, _)| *code == "en"));
+        assert!(supported.iter().any(|(code, _)| *code == "de"));
+        assert!(supported.iter().any(|(code, _)| *code == "fr"));
+        assert!(supported.iter().any(|(code, _)| *code == "ja"));
+        assert!(supported.iter().any(|(code, _)| *code == "zh"));
+    }
+
+    #[test]
+    fn test_language_supported_has_names() {
+        let supported = Language::supported();
+        let en = supported.iter().find(|(code, _)| *code == "en").unwrap();
+        assert_eq!(en.1, "english");
+    }
+
+    #[test]
+    fn test_language_all_codes_roundtrip() {
+        // Every code from supported() should be valid
+        for (code, _) in Language::supported() {
+            let lang = Language::new(code)
+                .unwrap_or_else(|_| panic!("supported code '{}' should be valid", code));
+            assert_eq!(lang.code(), Some(code));
+        }
+    }
+
+    #[test]
+    fn test_language_default_is_auto() {
+        let lang = Language::default();
+        assert!(lang.is_auto());
+    }
+
+    // --- Model tests ---
+
+    #[test]
+    fn test_model_from_str() {
+        assert!(matches!(Model::from_str("tiny"), Some(Model::Tiny)));
+        assert!(matches!(Model::from_str("large-v3"), Some(Model::LargeV3)));
+        assert!(matches!(Model::from_str("large-v3-turbo"), Some(Model::LargeV3Turbo)));
+        assert!(Model::from_str("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_model_filename() {
+        assert_eq!(Model::Tiny.filename(), "ggml-tiny.bin");
+        assert_eq!(Model::LargeV3.filename(), "ggml-large-v3.bin");
+        assert_eq!(Model::BaseEn.filename(), "ggml-base.en.bin");
+    }
+
+    #[test]
+    fn test_model_name() {
+        assert_eq!(Model::Tiny.name(), "tiny");
+        assert_eq!(Model::LargeV3.name(), "large-v3");
+        assert_eq!(Model::Custom(PathBuf::from("/tmp/model.bin")).name(), "custom");
+    }
+
+    #[test]
+    fn test_model_custom_filename() {
+        let model = Model::Custom(PathBuf::from("/path/to/my-model.ggml"));
+        assert_eq!(model.filename(), "my-model.ggml");
+    }
+
+    #[test]
+    fn test_all_models_roundtrip() {
+        let names = [
+            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
+            "medium", "medium.en", "large-v2", "large-v3", "large-v3-turbo",
+        ];
+        for name in names {
+            let model = Model::from_str(name)
+                .unwrap_or_else(|| panic!("model '{}' should parse", name));
+            assert_eq!(model.name(), name);
+        }
+    }
+
+    // --- AudioProcessing tests ---
+
+    #[test]
+    fn test_audio_processing_default_all_off() {
+        let ap = AudioProcessing::default();
+        assert!(!ap.dc_offset_removal);
+        assert!(!ap.normalize);
+        assert!(!ap.trim_silence);
+        assert_eq!(ap.silence_threshold_db, -40.0);
+        assert_eq!(ap.silence_pad_ms, 50);
+    }
+
+    #[test]
+    fn test_audio_processing_all() {
+        let ap = AudioProcessing::all();
+        assert!(ap.dc_offset_removal);
+        assert!(ap.normalize);
+        assert!(ap.trim_silence);
+    }
+
+    #[test]
+    fn test_audio_processing_builder() {
+        let ap = AudioProcessing::new()
+            .dc_offset_removal(true)
+            .silence_threshold_db(-30.0)
+            .silence_pad_ms(100);
+        assert!(ap.dc_offset_removal);
+        assert!(!ap.normalize);
+        assert!(!ap.trim_silence);
+        assert_eq!(ap.silence_threshold_db, -30.0);
+        assert_eq!(ap.silence_pad_ms, 100);
+    }
+
+    // --- TranscribeOptions tests ---
+
+    #[test]
+    fn test_options_defaults() {
+        let opts = TranscribeOptions::default();
+        assert!(opts.language.is_auto());
+        assert!(opts.gpu);
+        assert!(opts.vad);
+        assert_eq!(opts.temperature, 0.0);
+        assert!(!opts.translate);
+        assert!(!opts.word_timestamps);
+        assert!(opts.beam_size.is_none());
+        assert!(opts.n_threads.is_none());
+    }
+
+    #[test]
+    fn test_options_builder_chain() {
+        let opts = TranscribeOptions::new()
+            .model(Model::Tiny)
+            .translate(true)
+            .word_timestamps(true)
+            .gpu(false)
+            .vad(false)
+            .temperature(0.5)
+            .beam_size(5)
+            .n_threads(4);
+
+        assert!(matches!(opts.model, Model::Tiny));
+        assert!(opts.translate);
+        assert!(opts.word_timestamps);
+        assert!(!opts.gpu);
+        assert!(!opts.vad);
+        assert_eq!(opts.temperature, 0.5);
+        assert_eq!(opts.beam_size, Some(5));
+        assert_eq!(opts.n_threads, Some(4));
+    }
+
+    #[test]
+    fn test_options_language_validation() {
+        let opts = TranscribeOptions::new().language("en");
+        assert!(opts.is_ok());
+
+        let opts = TranscribeOptions::new().language("gibberish");
+        assert!(opts.is_err());
+    }
+
+    #[test]
+    fn test_options_resolve_cache_dir_default() {
+        let opts = TranscribeOptions::default();
+        let cache = opts.resolve_cache_dir();
+        assert!(cache.ends_with("transkribo/models"));
+    }
+
+    #[test]
+    fn test_options_resolve_cache_dir_custom() {
+        let opts = TranscribeOptions::new().cache_dir(PathBuf::from("/tmp/my-models"));
+        assert_eq!(opts.resolve_cache_dir(), PathBuf::from("/tmp/my-models"));
+    }
+}

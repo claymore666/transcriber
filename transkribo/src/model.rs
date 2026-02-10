@@ -124,3 +124,86 @@ pub fn list_cached_models(cache_dir: &Path) -> Vec<PathBuf> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Model;
+    use std::fs;
+
+    #[test]
+    fn test_list_cached_models_empty_dir() {
+        let tmp = std::env::temp_dir().join("transkribo_test_empty_cache");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let models = list_cached_models(&tmp);
+        assert!(models.is_empty());
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_list_cached_models_nonexistent_dir() {
+        let models = list_cached_models(Path::new("/nonexistent/path"));
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn test_list_cached_models_finds_bin_files() {
+        let tmp = std::env::temp_dir().join("transkribo_test_list_cache");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create fake model files
+        fs::write(tmp.join("ggml-tiny.bin"), b"fake model").unwrap();
+        fs::write(tmp.join("ggml-base.bin"), b"fake model").unwrap();
+        fs::write(tmp.join("ggml-tiny.bin.part"), b"partial").unwrap(); // should be excluded
+        fs::write(tmp.join("readme.txt"), b"not a model").unwrap(); // should be excluded
+
+        let models = list_cached_models(&tmp);
+        assert_eq!(models.len(), 2);
+        assert!(models.iter().all(|p| p.extension().unwrap() == "bin"));
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn test_ensure_model_custom_exists() {
+        let tmp = std::env::temp_dir().join("transkribo_test_custom_model.bin");
+        fs::write(&tmp, b"fake model data").unwrap();
+
+        let model = Model::Custom(tmp.clone());
+        let result = ensure_model(&model, Path::new("/unused")).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), tmp);
+
+        fs::remove_file(&tmp).ok();
+    }
+
+    #[tokio::test]
+    async fn test_ensure_model_custom_not_found() {
+        let model = Model::Custom(PathBuf::from("/nonexistent/model.bin"));
+        let result = ensure_model(&model, Path::new("/unused")).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), Error::ModelNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_ensure_model_uses_cache() {
+        let tmp = std::env::temp_dir().join("transkribo_test_model_cache");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Pre-populate cache with a fake model
+        let model_path = tmp.join("ggml-tiny.bin");
+        fs::write(&model_path, b"fake cached model").unwrap();
+
+        let model = Model::Tiny;
+        let result = ensure_model(&model, &tmp).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), model_path);
+
+        fs::remove_dir_all(&tmp).ok();
+    }
+}
