@@ -35,12 +35,12 @@ graph LR
     E --> H["WebVTT"]
     E --> I["JSON"]
 
-    style A fill:#4a9eff,color:#fff,stroke:none
-    style E fill:#10b981,color:#fff,stroke:none
-    style F fill:#f59e0b,color:#fff,stroke:none
-    style G fill:#f59e0b,color:#fff,stroke:none
-    style H fill:#f59e0b,color:#fff,stroke:none
-    style I fill:#f59e0b,color:#fff,stroke:none
+    style A fill:#2563eb,color:#fff,stroke:none
+    style E fill:#047857,color:#fff,stroke:none
+    style F fill:#b45309,color:#fff,stroke:none
+    style G fill:#b45309,color:#fff,stroke:none
+    style H fill:#b45309,color:#fff,stroke:none
+    style I fill:#b45309,color:#fff,stroke:none
 ```
 
 **Without transcriber** you'd wire up yt-dlp, ffmpeg, sample rate conversion, and whisper yourself — different tools, different formats, lots of glue code. **With transcriber** it's one function call:
