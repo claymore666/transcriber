@@ -1,10 +1,35 @@
-pub mod audio;
+//! Video/audio transcription library — URL or file in, transcript with timestamps out.
+//!
+//! **transcriber** handles the full pipeline: downloading (via yt-dlp), audio decoding
+//! (via symphonia), resampling to 16 kHz mono, and transcription (via whisper.cpp).
+//! Output as plain text, SRT, WebVTT, or JSON.
+//!
+//! # Quick start
+//!
+//! ```rust,no_run
+//! # #[tokio::main]
+//! # async fn main() -> transcriber::Result<()> {
+//! // Transcribe a local file
+//! let transcript = transcriber::transcribe_file("meeting.mp3").await?;
+//! println!("{}", transcript.text());
+//!
+//! // Or from a URL (requires the "download" feature, enabled by default)
+//! let transcript = transcriber::transcribe("https://example.com/video").await?;
+//! println!("{}", transcript.to_srt());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! See the [README](https://github.com/claymore666/transcriber) for full documentation,
+//! feature flags, and CLI usage.
+
+pub(crate) mod audio;
 pub mod config;
 #[cfg(feature = "download")]
-pub mod download;
+pub(crate) mod download;
 pub mod error;
 pub mod model;
-pub mod transcribe;
+pub(crate) mod transcribe;
 pub mod types;
 
 pub use config::{AudioProcessing, Language, Model, TranscribeOptions};

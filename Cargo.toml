@@ -2,6 +2,5 @@
 members = [
     "transcriber",
     "transcriber-cli",
-    "transcriber-py",
 ]
 resolver = "2"

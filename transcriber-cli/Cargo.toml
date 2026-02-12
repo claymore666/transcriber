@@ -3,7 +3,13 @@ name = "transcriber-cli"
 version = "0.1.0"
 edition = "2021"
 description = "CLI for transcriber transcription library"
-license = "MIT"
+license = "MIT OR Apache-2.0"
+authors = ["claymore666"]
+repository = "https://github.com/claymore666/transcriber"
+homepage = "https://github.com/claymore666/transcriber"
+keywords = ["transcription", "whisper", "audio", "video", "cli"]
+categories = ["command-line-utilities", "multimedia::audio"]
+rust-version = "1.75"
 
 [dependencies]
 transcriber = { path = "../transcriber", features = ["download"] }

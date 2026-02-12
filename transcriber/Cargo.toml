@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 description = "Video/audio transcription library — URL or file in, transcript with timestamps out"
 license = "MIT OR Apache-2.0"
+authors = ["claymore666"]
+repository = "https://github.com/claymore666/transcriber"
+homepage = "https://github.com/claymore666/transcriber"
+keywords = ["transcription", "whisper", "audio", "video", "subtitle"]
+categories = ["multimedia::audio"]
+readme = "../README.md"
+rust-version = "1.75"
 
 [features]
 default = ["download"]

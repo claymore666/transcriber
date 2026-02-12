@@ -113,7 +113,7 @@ let opts = TranscribeOptions::new()
     .word_timestamps(true)
     .translate(true)           // translate to English
     .gpu(true)
-    .beam_size(5);
+    .beam_size(5)?;
 
 let transcript = transcriber::transcribe_with_options(url, &opts).await?;
 
