@@ -147,7 +147,7 @@ impl Model {
     }
 
     /// Parse from string (e.g. CLI argument).
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse_name(s: &str) -> Option<Self> {
         match s {
             "tiny" => Some(Model::Tiny),
             "tiny.en" => Some(Model::TinyEn),
@@ -165,12 +165,23 @@ impl Model {
     }
 }
 
+impl std::str::FromStr for Model {
+    type Err = Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Model::parse_name(s).ok_or_else(|| {
+            Error::InvalidOption(format!("unknown model: \"{s}\""))
+        })
+    }
+}
+
 /// Audio processing options.
 ///
 /// By default all processing steps are **off** — the raw decoded/resampled PCM
 /// is passed straight to whisper, which is what the proven brewery pipeline does.
 /// Enable individual steps only when you know the source material needs it
 /// (e.g. recordings with DC bias, wildly varying levels, or long silence padding).
+#[derive(Debug, Clone)]
 pub struct AudioProcessing {
     /// Remove DC offset by subtracting the sample mean.
     pub dc_offset_removal: bool,
@@ -240,6 +251,7 @@ impl AudioProcessing {
 }
 
 /// Builder for transcription options.
+#[derive(Debug, Clone)]
 pub struct TranscribeOptions {
     pub model: Model,
     pub language: Language,
@@ -469,10 +481,10 @@ mod tests {
 
     #[test]
     fn test_model_from_str() {
-        assert!(matches!(Model::from_str("tiny"), Some(Model::Tiny)));
-        assert!(matches!(Model::from_str("large-v3"), Some(Model::LargeV3)));
-        assert!(matches!(Model::from_str("large-v3-turbo"), Some(Model::LargeV3Turbo)));
-        assert!(Model::from_str("nonexistent").is_none());
+        assert!(matches!(Model::parse_name("tiny"), Some(Model::Tiny)));
+        assert!(matches!(Model::parse_name("large-v3"), Some(Model::LargeV3)));
+        assert!(matches!(Model::parse_name("large-v3-turbo"), Some(Model::LargeV3Turbo)));
+        assert!(Model::parse_name("nonexistent").is_none());
     }
 
     #[test]
@@ -502,7 +514,7 @@ mod tests {
             "medium", "medium.en", "large-v2", "large-v3", "large-v3-turbo",
         ];
         for name in names {
-            let model = Model::from_str(name)
+            let model = Model::parse_name(name)
                 .unwrap_or_else(|| panic!("model '{}' should parse", name));
             assert_eq!(model.name(), name);
         }

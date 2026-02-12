@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::Model;
 use crate::error::{Error, Result};
@@ -78,11 +78,10 @@ async fn download_model(url: &str, dest: &Path) -> Result<()> {
             .unwrap_or_default()
     ));
 
-    // Write to a unique temp file to avoid concurrent download corruption
-    let tmp_path = dest.with_extension(format!(
-        "bin.part.{}",
-        std::process::id()
-    ));
+    // Write to a unique temp file to avoid concurrent download corruption.
+    // PartFileGuard ensures the .part file is cleaned up on any error.
+    let tmp_path = dest.with_extension(format!("bin.part.{}", std::process::id()));
+    let mut _part_guard = PartFileGuard { path: &tmp_path, armed: true };
     let mut file = std::fs::File::create(&tmp_path)?;
     let mut stream = response.bytes_stream();
     let mut downloaded: u64 = 0;
@@ -92,8 +91,6 @@ async fn download_model(url: &str, dest: &Path) -> Result<()> {
         let chunk = chunk?;
         downloaded += chunk.len() as u64;
         if downloaded > MAX_MODEL_BYTES {
-            drop(file);
-            std::fs::remove_file(&tmp_path).ok();
             return Err(Error::ModelDownload(format!(
                 "download exceeded max size ({MAX_MODEL_BYTES} bytes)"
             )));
@@ -105,28 +102,47 @@ async fn download_model(url: &str, dest: &Path) -> Result<()> {
     file.flush()?;
     drop(file);
 
-    // Verify we got something reasonable
+    // Verify the download before moving into cache
     let file_size = std::fs::metadata(&tmp_path)?.len();
     if file_size < 1_000_000 {
-        std::fs::remove_file(&tmp_path).ok();
         return Err(Error::ModelDownload(format!(
             "downloaded file too small ({file_size} bytes) — likely an error page"
         )));
     }
 
-    std::fs::rename(&tmp_path, dest)?;
-    pb.finish_with_message("Download complete");
-
     if total_size > 0 && file_size != total_size {
-        warn!(
-            expected = total_size,
-            actual = file_size,
-            "file size mismatch — model may be corrupt"
-        );
+        return Err(Error::ModelDownload(format!(
+            "file size mismatch (expected {total_size} bytes, got {file_size}) — download may be corrupt"
+        )));
     }
+
+    // All checks passed — move into cache (disarm the cleanup guard)
+    std::fs::rename(&tmp_path, dest)?;
+    _part_guard.disarm();
+    pb.finish_with_message("Download complete");
 
     info!(path = %dest.display(), size = file_size, "model saved");
     Ok(())
+}
+
+/// RAII guard that removes a .part file on drop unless disarmed.
+struct PartFileGuard<'a> {
+    path: &'a Path,
+    armed: bool,
+}
+
+impl<'a> PartFileGuard<'a> {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PartFileGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed && self.path.exists() {
+            std::fs::remove_file(self.path).ok();
+        }
+    }
 }
 
 /// List all cached models.

@@ -7,7 +7,7 @@ use crate::config::AudioProcessing;
 use crate::error::{Error, Result};
 
 /// Target sample rate for whisper.cpp.
-const WHISPER_SAMPLE_RATE: u32 = 16_000;
+pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
 
 /// Maximum audio duration in seconds (8 hours).
 /// Prevents unbounded memory allocation from very long audio files.
@@ -26,7 +26,7 @@ const MIN_RMS: f32 = 1e-6;
 
 /// Load an audio file, decode it, and return 16kHz mono f32 samples ready for whisper.
 ///
-/// Uses ffmpeg to decode any audio format, downnmix to mono, and resample to 16kHz —
+/// Uses ffmpeg to decode any audio format, downmix to mono, and resample to 16kHz —
 /// exactly like the proven brewery/whisperx pipeline. Supports every format ffmpeg does
 /// (mp3, wav, ogg, opus, webm, aac, flac, m4a, wma, aiff, ...).
 ///
@@ -43,6 +43,17 @@ pub fn load_audio(path: &Path, processing: &AudioProcessing) -> Result<Vec<f32>>
         });
     }
 
+    // Pre-check duration via ffprobe before loading entire file into memory.
+    // This prevents OOM from very long audio files.
+    if let Some(duration) = probe_duration(path) {
+        if duration > MAX_AUDIO_DURATION_SECS {
+            return Err(Error::AudioDecode(format!(
+                "audio too long ({:.0}s) — maximum supported duration is {:.0}s",
+                duration, MAX_AUDIO_DURATION_SECS
+            )));
+        }
+    }
+
     let mut samples = decode_with_ffmpeg(path)?;
 
     let duration_raw = samples.len() as f64 / WHISPER_SAMPLE_RATE as f64;
@@ -52,6 +63,8 @@ pub fn load_audio(path: &Path, processing: &AudioProcessing) -> Result<Vec<f32>>
         "decoded audio"
     );
 
+    // Post-decode check as a safety net (ffprobe might not be available or may
+    // report duration inaccurately for some formats).
     if duration_raw > MAX_AUDIO_DURATION_SECS {
         return Err(Error::AudioDecode(format!(
             "audio too long ({:.0}s) — maximum supported duration is {:.0}s",
@@ -82,6 +95,27 @@ pub fn load_audio(path: &Path, processing: &AudioProcessing) -> Result<Vec<f32>>
     Ok(samples)
 }
 
+/// Probe audio duration using ffprobe without decoding the full file.
+/// Returns None if ffprobe is not available or can't determine duration.
+fn probe_duration(path: &Path) -> Option<f64> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v", "quiet",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.trim().parse::<f64>().ok()
+}
+
 /// Decode any audio file to 16kHz mono f32 via ffmpeg subprocess.
 ///
 /// ffmpeg handles decoding, resampling, and channel mixing in one shot.
@@ -90,6 +124,8 @@ fn decode_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
     let output = Command::new("ffmpeg")
         .args([
             "-nostdin",
+            "-loglevel",
+            "error",
             "-threads",
             "0",
             "-i",

@@ -85,7 +85,7 @@ impl Transcript {
 
 /// Format seconds as SRT timestamp: HH:MM:SS,mmm
 fn format_srt_time(seconds: f64) -> String {
-    let total_ms = (seconds * 1000.0) as u64;
+    let total_ms = (seconds.max(0.0) * 1000.0).round() as u64;
     let h = total_ms / 3_600_000;
     let m = (total_ms % 3_600_000) / 60_000;
     let s = (total_ms % 60_000) / 1_000;
@@ -95,7 +95,7 @@ fn format_srt_time(seconds: f64) -> String {
 
 /// Format seconds as VTT timestamp: HH:MM:SS.mmm
 fn format_vtt_time(seconds: f64) -> String {
-    let total_ms = (seconds * 1000.0) as u64;
+    let total_ms = (seconds.max(0.0) * 1000.0).round() as u64;
     let h = total_ms / 3_600_000;
     let m = (total_ms % 3_600_000) / 60_000;
     let s = (total_ms % 60_000) / 1_000;

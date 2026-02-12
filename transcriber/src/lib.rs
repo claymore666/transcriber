@@ -50,11 +50,15 @@ pub async fn transcribe_with_options(
     url: &str,
     options: &TranscribeOptions,
 ) -> Result<Transcript> {
-    // Create a per-run temp directory so concurrent runs don't collide
-    // and the entire directory is cleaned up afterwards.
+    // Create a unique temp directory per invocation so concurrent runs
+    // (even within the same process) don't collide.
     let tmp_dir = std::env::temp_dir().join(format!(
-        "transcriber-{}",
-        std::process::id()
+        "transcriber-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
     ));
     let _cleanup = TempDirGuard(&tmp_dir);
 

@@ -47,14 +47,16 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
 
     info!(%url, "downloading audio");
 
-    // Check yt-dlp is installed
+    // Check yt-dlp is installed and working
     let check = tokio::process::Command::new("yt-dlp")
         .arg("--version")
         .output()
         .await;
 
-    if check.is_err() {
-        return Err(Error::YtDlpNotFound);
+    match check {
+        Err(_) => return Err(Error::YtDlpNotFound),
+        Ok(output) if !output.status.success() => return Err(Error::YtDlpNotFound),
+        _ => {}
     }
 
     std::fs::create_dir_all(output_dir)?;

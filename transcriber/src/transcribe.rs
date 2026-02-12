@@ -18,7 +18,10 @@ pub fn transcribe_samples(
 
     let mut ctx_params = WhisperContextParameters::new();
     ctx_params.use_gpu(options.gpu);
-    ctx_params.gpu_device(options.gpu_device as i32);
+    ctx_params.gpu_device(
+        i32::try_from(options.gpu_device)
+            .map_err(|_| Error::Transcription(format!("gpu_device {} exceeds i32 range", options.gpu_device)))?
+    );
 
     let ctx = WhisperContext::new_with_params(
         model_path.to_str().ok_or_else(|| {
@@ -31,7 +34,8 @@ pub fn transcribe_samples(
 
     let mut params = match options.beam_size {
         Some(beam_size) => FullParams::new(SamplingStrategy::BeamSearch {
-            beam_size: beam_size as i32,
+            beam_size: i32::try_from(beam_size)
+                .map_err(|_| Error::Transcription(format!("beam_size {} exceeds i32 range", beam_size)))?,
             patience: -1.0,
         }),
         None => FullParams::new(SamplingStrategy::Greedy { best_of: 5 }),
@@ -52,7 +56,10 @@ pub fn transcribe_samples(
 
     // Threading
     if let Some(n) = options.n_threads {
-        params.set_n_threads(n as i32);
+        params.set_n_threads(
+            i32::try_from(n)
+                .map_err(|_| Error::Transcription(format!("n_threads {} exceeds i32 range", n)))?
+        );
     }
 
     // VAD
@@ -136,7 +143,7 @@ pub fn transcribe_samples(
         });
     }
 
-    let duration = samples.len() as f64 / 16_000.0;
+    let duration = samples.len() as f64 / crate::audio::WHISPER_SAMPLE_RATE as f64;
 
     // Get detected language from whisper state
     let detected_lang_id = state.full_lang_id_from_state();

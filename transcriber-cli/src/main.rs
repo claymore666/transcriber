@@ -158,7 +158,7 @@ async fn main() {
     }
 
     if let Some(model_name) = &cli.download_model {
-        let model = match Model::from_str(model_name) {
+        let model = match Model::parse_name(model_name) {
             Some(m) => m,
             None => {
                 eprintln!("Unknown model: {model_name}");
@@ -181,7 +181,7 @@ async fn main() {
     let input = cli.input.unwrap();
 
     // Build options
-    let model = match Model::from_str(&cli.model) {
+    let model = match Model::parse_name(&cli.model) {
         Some(m) => m,
         None => {
             // Try as custom model path
