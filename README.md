@@ -24,8 +24,8 @@ graph LR
     B --> C["ffmpeg
     decode any format"]
 
-    C --> D["resample
-    16kHz mono"]
+    C --> D["compand + loudnorm
+    compress & normalize"]
 
     D --> E["whisper.cpp
     CPU or GPU"]
@@ -36,6 +36,7 @@ graph LR
     E --> I["JSON"]
 
     style A fill:#2563eb,color:#fff,stroke:none
+    style D fill:#7c3aed,color:#fff,stroke:none
     style E fill:#047857,color:#fff,stroke:none
     style F fill:#b45309,color:#fff,stroke:none
     style G fill:#b45309,color:#fff,stroke:none
@@ -121,6 +122,22 @@ for segment in &transcript.segments {
     println!("[{:.1}s - {:.1}s] {}", segment.start, segment.end, segment.text);
 }
 ```
+
+## Audio conditioning
+
+All audio is automatically conditioned before transcription via ffmpeg:
+
+1. **Dynamic range compression** (`compand`) — boosts quiet speech (distant speakers, soft voices) while limiting loud peaks. Tuned for speech dynamics with 0.3s attack / 0.8s decay.
+2. **Loudness normalization** (`loudnorm`) — EBU R128 normalization targeting -16 LUFS, the optimal input level for whisper.
+
+This is critical for real-world recordings (meetings, lectures, interviews) where speakers are at different distances from the microphone.
+
+## Hallucination prevention
+
+Whisper has a known failure mode where the decoder enters a repetition loop, generating the same phrase endlessly — especially on long recordings with quiet passages. transcriber prevents this at two levels:
+
+- **Decoder isolation**: each 30-second window starts with a clean decoder slate (`n_max_text_ctx=0`), preventing hallucinated text from poisoning subsequent windows.
+- **Post-processing filter**: a rolling-window detector catches repeated segments (exact repeats, alternating A/B patterns, short cycles) and removes them.
 
 ## What it supports
 
