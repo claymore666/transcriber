@@ -46,9 +46,13 @@ struct Cli {
     #[arg(long)]
     threads: Option<u32>,
 
-    /// Disable voice activity detection.
+    /// Enable voice activity detection (requires --vad-model-path).
     #[arg(long)]
-    no_vad: bool,
+    vad: bool,
+
+    /// Path to Silero VAD model file.
+    #[arg(long)]
+    vad_model_path: Option<String>,
 
     /// Sampling temperature.
     #[arg(long, default_value = "0.0")]
@@ -211,7 +215,7 @@ async fn main() {
         .word_timestamps(cli.word_timestamps)
         .gpu(!cli.no_gpu)
         .gpu_device(cli.gpu_device)
-        .vad(!cli.no_vad)
+        .vad(cli.vad)
         .temperature(cli.temperature)
     {
         Ok(o) => o.audio_processing(
@@ -239,6 +243,9 @@ async fn main() {
             Ok(o) => o,
             Err(e) => { eprintln!("Error: {e}"); std::process::exit(1); }
         };
+    }
+    if let Some(path) = cli.vad_model_path {
+        opts = opts.vad_model_path(path);
     }
     if let Some(dir) = cli.cache_dir {
         opts = opts.cache_dir(dir);

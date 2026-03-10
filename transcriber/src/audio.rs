@@ -132,6 +132,14 @@ fn decode_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
         ])
         .arg(path)
         .args([
+            // Audio conditioning for speech recognition:
+            // 1. compand: dynamic range compression — boosts quiet passages
+            //    (soft speakers, distant mic) while limiting loud peaks.
+            //    Attack/decay 0.3s/0.8s is tuned for speech dynamics.
+            // 2. loudnorm: EBU R128 loudness normalization to -16 LUFS,
+            //    which is the optimal input level for whisper.
+            "-af",
+            "compand=attacks=0.3:decays=0.8:points=-80/-80|-45/-25|-27/-15|0/-10:gain=5,loudnorm=I=-16:TP=-1.5:LRA=11",
             "-f",
             "s16le",
             "-ac",

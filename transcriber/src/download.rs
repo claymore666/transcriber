@@ -12,10 +12,10 @@ const MAX_SUBPROCESS_OUTPUT: usize = 10_000_000;
 pub struct DownloadResult {
     pub audio_path: PathBuf,
     pub title: Option<String>,
-    pub duration: Option<f64>,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct YtDlpInfo {
     title: Option<String>,
     duration: Option<f64>,
@@ -146,7 +146,6 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
     Ok(DownloadResult {
         audio_path,
         title: info.as_ref().and_then(|i| i.title.clone()),
-        duration: info.as_ref().and_then(|i| i.duration),
     })
 }
 

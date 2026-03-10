@@ -262,6 +262,7 @@ pub struct TranscribeOptions {
     pub gpu: bool,
     pub gpu_device: u32,
     pub vad: bool,
+    pub vad_model_path: Option<String>,
     pub temperature: f32,
     pub beam_size: Option<u32>,
     pub cache_dir: Option<PathBuf>,
@@ -279,7 +280,8 @@ impl Default for TranscribeOptions {
             n_threads: None,
             gpu: true,
             gpu_device: 0,
-            vad: true,
+            vad: false,
+            vad_model_path: None,
             temperature: 0.0,
             beam_size: None,
             cache_dir: None,
@@ -340,6 +342,11 @@ impl TranscribeOptions {
 
     pub fn vad(mut self, enabled: bool) -> Self {
         self.vad = enabled;
+        self
+    }
+
+    pub fn vad_model_path(mut self, path: impl Into<String>) -> Self {
+        self.vad_model_path = Some(path.into());
         self
     }
 
@@ -560,7 +567,8 @@ mod tests {
         let opts = TranscribeOptions::default();
         assert!(opts.language.is_auto());
         assert!(opts.gpu);
-        assert!(opts.vad);
+        assert!(!opts.vad);
+        assert!(opts.vad_model_path.is_none());
         assert_eq!(opts.temperature, 0.0);
         assert!(!opts.translate);
         assert!(!opts.word_timestamps);

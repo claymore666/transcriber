@@ -62,8 +62,10 @@ pub fn transcribe_samples(
         );
     }
 
-    // VAD
+    // VAD — requires a separate Silero VAD model file.
+    // Only enable if the user explicitly turned it on; we don't ship a default model.
     if options.vad {
+        params.set_vad_model_path(options.vad_model_path.as_deref());
         params.enable_vad(true);
     }
 
@@ -143,6 +145,10 @@ pub fn transcribe_samples(
         });
     }
 
+    // Suppress hallucination loops: if the same text repeats 3+ times
+    // consecutively, keep only the first occurrence.
+    let segments = suppress_hallucination_loops(segments);
+
     let duration = samples.len() as f64 / crate::audio::WHISPER_SAMPLE_RATE as f64;
 
     // Get detected language from whisper state
@@ -159,4 +165,41 @@ pub fn transcribe_samples(
         source_url: None,
         source_title: None,
     })
+}
+
+/// Remove hallucination loops where the same text repeats 3+ times consecutively.
+/// Keeps the first occurrence and drops the duplicates.
+fn suppress_hallucination_loops(segments: Vec<Segment>) -> Vec<Segment> {
+    if segments.len() < 3 {
+        return segments;
+    }
+
+    let mut result: Vec<Segment> = Vec::with_capacity(segments.len());
+    let mut repeat_count: usize = 0;
+
+    for seg in segments {
+        let text = seg.text.trim();
+        let is_repeat = result
+            .last()
+            .is_some_and(|prev| prev.text.trim() == text);
+
+        if is_repeat {
+            repeat_count += 1;
+            if repeat_count < 2 {
+                // Allow one repeat (could be genuine), drop from 3rd onward
+                result.push(seg);
+            } else {
+                debug!(
+                    text = text,
+                    count = repeat_count + 1,
+                    "suppressed hallucination repeat"
+                );
+            }
+        } else {
+            repeat_count = 0;
+            result.push(seg);
+        }
+    }
+
+    result
 }
