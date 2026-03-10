@@ -1,11 +1,18 @@
+use std::collections::VecDeque;
 use std::path::Path;
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 use crate::config::{Language, TranscribeOptions};
 use crate::error::{Error, Result};
 use crate::types::{Segment, Transcript, Word};
+
+/// Window size for detecting hallucination loops via rolling text history.
+const HALLUCINATION_WINDOW: usize = 6;
+
+/// If a single phrase appears this many times in the rolling window, it's a loop.
+const HALLUCINATION_THRESHOLD: usize = 3;
 
 /// Transcribe audio samples using whisper.cpp.
 /// Samples must be 16kHz mono f32.
@@ -50,6 +57,23 @@ pub fn transcribe_samples(
     params.set_translate(options.translate);
     params.set_token_timestamps(options.word_timestamps);
     params.set_temperature(options.temperature);
+
+    // Anti-hallucination decoder settings:
+    // - entropy_thold: segments with high entropy (repetitive/low-info) get retried
+    //   at higher temperature. Default 2.4, we use 2.4 (whisper's own default).
+    // - logprob_thold: segments with very low confidence get retried. Default -1.0.
+    // - temperature_inc: how much to bump temperature on retry. Default 0.2.
+    // - suppress_nst: suppress non-speech tokens to reduce hallucinated filler.
+    // - no_speech_thold: threshold for no-speech probability. Default 0.6.
+    // - n_max_text_ctx: limit past text used as decoder prompt. Default 16384.
+    //   Setting to 0 prevents hallucination loops from poisoning subsequent chunks —
+    //   each 30s window starts with a clean decoder slate.
+    params.set_entropy_thold(2.4);
+    params.set_logprob_thold(-1.0);
+    params.set_temperature_inc(0.2);
+    params.set_suppress_nst(true);
+    params.set_no_speech_thold(0.6);
+    params.set_n_max_text_ctx(0);
 
     #[cfg(feature = "diarize")]
     params.set_tdrz_enable(options.diarize);
@@ -145,9 +169,13 @@ pub fn transcribe_samples(
         });
     }
 
-    // Suppress hallucination loops: if the same text repeats 3+ times
-    // consecutively, keep only the first occurrence.
-    let segments = suppress_hallucination_loops(segments);
+    // Post-processing: detect and remove hallucination loops
+    let before = segments.len();
+    let segments = suppress_hallucinations(segments);
+    let removed = before - segments.len();
+    if removed > 0 {
+        warn!(removed, "suppressed hallucinated segments");
+    }
 
     let duration = samples.len() as f64 / crate::audio::WHISPER_SAMPLE_RATE as f64;
 
@@ -167,39 +195,127 @@ pub fn transcribe_samples(
     })
 }
 
-/// Remove hallucination loops where the same text repeats 3+ times consecutively.
-/// Keeps the first occurrence and drops the duplicates.
-fn suppress_hallucination_loops(segments: Vec<Segment>) -> Vec<Segment> {
-    if segments.len() < 3 {
+/// Detect and remove hallucination loops from segments.
+///
+/// Uses a rolling window to catch:
+/// - Exact consecutive repeats (A, A, A, A...)
+/// - Alternating patterns (A, B, A, B, A, B...)
+/// - Short cycle loops (A, B, C, A, B, C...)
+///
+/// A segment is considered hallucinated if the same normalized text appears
+/// >= HALLUCINATION_THRESHOLD times within the last HALLUCINATION_WINDOW segments.
+fn suppress_hallucinations(segments: Vec<Segment>) -> Vec<Segment> {
+    if segments.len() < HALLUCINATION_THRESHOLD {
         return segments;
     }
 
     let mut result: Vec<Segment> = Vec::with_capacity(segments.len());
-    let mut repeat_count: usize = 0;
+    let mut window: VecDeque<String> = VecDeque::with_capacity(HALLUCINATION_WINDOW);
 
     for seg in segments {
-        let text = seg.text.trim();
-        let is_repeat = result
-            .last()
-            .is_some_and(|prev| prev.text.trim() == text);
+        let normalized = seg.text.trim().to_lowercase();
 
-        if is_repeat {
-            repeat_count += 1;
-            if repeat_count < 2 {
-                // Allow one repeat (could be genuine), drop from 3rd onward
-                result.push(seg);
-            } else {
-                debug!(
-                    text = text,
-                    count = repeat_count + 1,
-                    "suppressed hallucination repeat"
-                );
-            }
-        } else {
-            repeat_count = 0;
-            result.push(seg);
+        // Count how many times this text appears in the rolling window
+        let count = window.iter().filter(|t| **t == normalized).count();
+
+        if count >= HALLUCINATION_THRESHOLD {
+            debug!(
+                text = seg.text.trim(),
+                window_count = count + 1,
+                "suppressed hallucination"
+            );
+            // Don't add to window either — prevents the window from being
+            // entirely hallucinated text which would mask new hallucinations
+            continue;
         }
+
+        // Maintain rolling window
+        if window.len() >= HALLUCINATION_WINDOW {
+            window.pop_front();
+        }
+        window.push_back(normalized);
+        result.push(seg);
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seg(text: &str, start: f64, end: f64) -> Segment {
+        Segment {
+            start,
+            end,
+            text: text.to_string(),
+            speaker_turn: false,
+            no_speech_probability: 0.0,
+            words: None,
+        }
+    }
+
+    #[test]
+    fn test_suppress_exact_repeats() {
+        let segments = vec![
+            seg("Hello", 0.0, 1.0),
+            seg("Hello", 1.0, 2.0),
+            seg("Hello", 2.0, 3.0),
+            seg("Hello", 3.0, 4.0),
+            seg("World", 4.0, 5.0),
+        ];
+        let result = suppress_hallucinations(segments);
+        assert_eq!(result.len(), 4); // 3x Hello (threshold) + World
+    }
+
+    #[test]
+    fn test_suppress_alternating_pattern() {
+        let segments = vec![
+            seg("Ja, ja.", 0.0, 1.0),
+            seg("Das stimmt.", 1.0, 2.0),
+            seg("Ja, ja.", 2.0, 3.0),
+            seg("Das stimmt.", 3.0, 4.0),
+            seg("Ja, ja.", 4.0, 5.0),
+            seg("Das stimmt.", 5.0, 6.0),
+            seg("Ja, ja.", 6.0, 7.0),
+            seg("Real content", 7.0, 8.0),
+        ];
+        let result = suppress_hallucinations(segments);
+        // First few get through, then suppression kicks in
+        let texts: Vec<&str> = result.iter().map(|s| s.text.trim()).collect();
+        assert!(texts.contains(&"Real content"));
+        // The alternating phrases should be limited
+        let ja_count = texts.iter().filter(|t| **t == "Ja, ja.").count();
+        assert!(ja_count <= 3, "too many repeats: {ja_count}");
+    }
+
+    #[test]
+    fn test_no_false_positives_on_short_words() {
+        let segments = vec![
+            seg("Ja.", 0.0, 1.0),
+            seg("Okay.", 1.0, 2.0),
+            seg("Ja.", 2.0, 3.0),
+            seg("Nein.", 3.0, 4.0),
+        ];
+        let result = suppress_hallucinations(segments);
+        assert_eq!(result.len(), 4); // only 2 "Ja." — below threshold
+    }
+
+    #[test]
+    fn test_case_insensitive() {
+        let segments = vec![
+            seg("Hello", 0.0, 1.0),
+            seg("hello", 1.0, 2.0),
+            seg("HELLO", 2.0, 3.0),
+            seg("Hello", 3.0, 4.0),
+        ];
+        let result = suppress_hallucinations(segments);
+        assert!(result.len() < 4);
+    }
+
+    #[test]
+    fn test_empty_and_short() {
+        assert_eq!(suppress_hallucinations(vec![]).len(), 0);
+        assert_eq!(suppress_hallucinations(vec![seg("A", 0.0, 1.0)]).len(), 1);
+    }
 }
