@@ -29,6 +29,8 @@ pub mod config;
 pub(crate) mod download;
 pub mod error;
 pub mod model;
+#[cfg(feature = "speaker-id")]
+pub mod speaker;
 pub(crate) mod transcribe;
 pub mod types;
 
@@ -73,12 +75,20 @@ pub async fn transcribe_file_with_options(
     .map_err(|e| Error::Transcription(format!("audio loading task failed: {e}")))??;
 
     // Transcribe (blocking CPU-intensive whisper inference)
-    let options = options.clone();
-    let transcript = tokio::task::spawn_blocking(move || {
-        transcribe::transcribe_samples(&samples, &model_path, &options)
+    let options_clone = options.clone();
+    let samples_clone = samples.clone();
+    #[allow(unused_mut)]
+    let mut transcript = tokio::task::spawn_blocking(move || {
+        transcribe::transcribe_samples(&samples_clone, &model_path, &options_clone)
     })
     .await
     .map_err(|e| Error::Transcription(format!("transcription task failed: {e}")))??;
+
+    // Speaker identification pass (if enabled)
+    #[cfg(feature = "speaker-id")]
+    if options.speaker_identification {
+        run_speaker_identification(&mut transcript, &samples, options).await?;
+    }
 
     Ok(transcript)
 }
@@ -124,17 +134,64 @@ pub async fn transcribe_with_options(
 
     // Transcribe (blocking CPU-intensive whisper inference)
     let options_clone = options.clone();
+    let samples_clone = samples.clone();
+    #[allow(unused_mut)]
     let mut transcript = tokio::task::spawn_blocking(move || {
-        transcribe::transcribe_samples(&samples, &model_path, &options_clone)
+        transcribe::transcribe_samples(&samples_clone, &model_path, &options_clone)
     })
     .await
     .map_err(|e| Error::Transcription(format!("transcription task failed: {e}")))??;
+
+    // Speaker identification pass (if enabled)
+    #[cfg(feature = "speaker-id")]
+    if options.speaker_identification {
+        run_speaker_identification(&mut transcript, &samples, options).await?;
+    }
 
     // Attach source metadata
     transcript.source_url = Some(url.to_string());
     transcript.source_title = download_result.title;
 
     Ok(transcript)
+}
+
+/// Run speaker identification on a completed transcript.
+#[cfg(feature = "speaker-id")]
+async fn run_speaker_identification(
+    transcript: &mut Transcript,
+    samples: &[f32],
+    options: &TranscribeOptions,
+) -> Result<()> {
+    let cache_dir = options.resolve_cache_dir();
+    let model_path = match &options.speaker_model_path {
+        Some(p) => p.clone(),
+        None => speaker::ensure_speaker_model(&cache_dir).await?,
+    };
+    let profiles_path = options
+        .speaker_profiles_path
+        .clone()
+        .unwrap_or_else(speaker::default_profiles_path);
+
+    let threshold = options.speaker_threshold;
+    let samples = samples.to_vec();
+    let mut segments = std::mem::take(&mut transcript.segments);
+
+    // Speaker ID is CPU/GPU bound — run in blocking context
+    let segments = tokio::task::spawn_blocking(move || -> Result<Vec<types::Segment>> {
+        let mut identifier = speaker::SpeakerIdentifier::new(
+            &model_path,
+            &profiles_path,
+            threshold,
+            &[speaker::ExecutionProvider::Cpu],
+        )?;
+        identifier.identify_segments(&mut segments, &samples)?;
+        Ok(segments)
+    })
+    .await
+    .map_err(|e| Error::Transcription(format!("speaker identification task failed: {e}")))??;
+
+    transcript.segments = segments;
+    Ok(())
 }
 
 /// RAII guard that removes an entire temp directory when dropped.

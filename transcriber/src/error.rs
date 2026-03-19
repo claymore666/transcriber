@@ -38,6 +38,10 @@ pub enum Error {
     #[error("yt-dlp not found — install with: pip install yt-dlp")]
     YtDlpNotFound,
 
+    #[cfg(feature = "speaker-id")]
+    #[error("speaker identification error: {0}")]
+    SpeakerId(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

@@ -12,7 +12,7 @@ categories = ["command-line-utilities", "multimedia::audio"]
 rust-version = "1.82"
 
 [dependencies]
-transcriber = { path = "../transcriber", features = ["download"] }
+transcriber = { path = "../transcriber", features = ["download", "speaker-id"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 indicatif = "0.17"

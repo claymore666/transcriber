@@ -18,6 +18,12 @@ pub struct Segment {
     pub speaker_turn: bool,
     pub no_speech_probability: f32,
     pub words: Option<Vec<Word>>,
+    /// Speaker name (set by speaker identification, if enabled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_id: Option<String>,
+    /// Cosine similarity confidence for the speaker match (0.0 - 1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker_confidence: Option<f32>,
 }
 
 /// Complete transcription result.
@@ -42,6 +48,8 @@ impl Transcript {
     }
 
     /// Format as SRT subtitles.
+    ///
+    /// If speaker identification was enabled, segments are prefixed with `[Speaker]`.
     pub fn to_srt(&self) -> String {
         use std::fmt::Write;
         let mut out = String::new();
@@ -51,12 +59,18 @@ impl Transcript {
                 format_srt_time(seg.start),
                 format_srt_time(seg.end),
             );
-            let _ = writeln!(out, "{}\n", seg.text.trim());
+            if let Some(speaker) = &seg.speaker_id {
+                let _ = writeln!(out, "[{speaker}] {}\n", seg.text.trim());
+            } else {
+                let _ = writeln!(out, "{}\n", seg.text.trim());
+            }
         }
         out
     }
 
     /// Format as WebVTT subtitles.
+    ///
+    /// If speaker identification was enabled, segments are prefixed with `[Speaker]`.
     pub fn to_vtt(&self) -> String {
         use std::fmt::Write;
         let mut out = String::from("WEBVTT\n\n");
@@ -65,7 +79,11 @@ impl Transcript {
                 format_vtt_time(seg.start),
                 format_vtt_time(seg.end),
             );
-            let _ = writeln!(out, "{}\n", seg.text.trim());
+            if let Some(speaker) = &seg.speaker_id {
+                let _ = writeln!(out, "[{speaker}] {}\n", seg.text.trim());
+            } else {
+                let _ = writeln!(out, "{}\n", seg.text.trim());
+            }
         }
         out
     }
@@ -118,6 +136,8 @@ mod tests {
                         Word { text: " Hello".into(), start: 0.0, end: 1.0, probability: 0.95 },
                         Word { text: " world.".into(), start: 1.0, end: 2.5, probability: 0.90 },
                     ]),
+                    speaker_id: None,
+                    speaker_confidence: None,
                 },
                 Segment {
                     start: 3.0,
@@ -126,6 +146,8 @@ mod tests {
                     speaker_turn: true,
                     no_speech_probability: 0.05,
                     words: None,
+                    speaker_id: None,
+                    speaker_confidence: None,
                 },
             ],
             language: "en".into(),
@@ -165,6 +187,8 @@ mod tests {
                 speaker_turn: false,
                 no_speech_probability: 0.0,
                 words: None,
+                speaker_id: None,
+                speaker_confidence: None,
             }],
             language: "en".into(),
             duration: 1.0,
@@ -293,6 +317,8 @@ mod tests {
                     speaker_turn: false,
                     no_speech_probability: 0.0,
                     words: None,
+                    speaker_id: None,
+                    speaker_confidence: None,
                 })
                 .collect(),
             language: "en".into(),

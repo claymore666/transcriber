@@ -166,6 +166,8 @@ pub fn transcribe_samples(
             speaker_turn,
             no_speech_probability: no_speech_prob,
             words,
+            speaker_id: None,
+            speaker_confidence: None,
         });
     }
 
@@ -252,6 +254,8 @@ mod tests {
             speaker_turn: false,
             no_speech_probability: 0.0,
             words: None,
+            speaker_id: None,
+            speaker_confidence: None,
         }
     }
 

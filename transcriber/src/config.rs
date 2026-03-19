@@ -262,6 +262,14 @@ pub struct TranscribeOptions {
     pub beam_size: Option<u32>,
     pub cache_dir: Option<PathBuf>,
     pub audio_processing: AudioProcessing,
+    /// Enable speaker identification (requires `speaker-id` feature).
+    pub speaker_identification: bool,
+    /// Path to speaker profiles JSON file.
+    pub speaker_profiles_path: Option<PathBuf>,
+    /// Path to wespeaker ONNX model file.
+    pub speaker_model_path: Option<PathBuf>,
+    /// Cosine similarity threshold for speaker matching (default: 0.6).
+    pub speaker_threshold: f32,
 }
 
 impl Default for TranscribeOptions {
@@ -281,6 +289,10 @@ impl Default for TranscribeOptions {
             beam_size: None,
             cache_dir: None,
             audio_processing: AudioProcessing::default(),
+            speaker_identification: false,
+            speaker_profiles_path: None,
+            speaker_model_path: None,
+            speaker_threshold: 0.6,
         }
     }
 }
@@ -370,6 +382,26 @@ impl TranscribeOptions {
 
     pub fn audio_processing(mut self, ap: AudioProcessing) -> Self {
         self.audio_processing = ap;
+        self
+    }
+
+    pub fn speaker_identification(mut self, enabled: bool) -> Self {
+        self.speaker_identification = enabled;
+        self
+    }
+
+    pub fn speaker_profiles_path(mut self, path: PathBuf) -> Self {
+        self.speaker_profiles_path = Some(path);
+        self
+    }
+
+    pub fn speaker_model_path(mut self, path: PathBuf) -> Self {
+        self.speaker_model_path = Some(path);
+        self
+    }
+
+    pub fn speaker_threshold(mut self, threshold: f32) -> Self {
+        self.speaker_threshold = threshold;
         self
     }
 

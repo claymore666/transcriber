@@ -81,6 +81,8 @@ fn output_formats_roundtrip() {
                 speaker_turn: false,
                 no_speech_probability: 0.1,
                 words: None,
+                speaker_id: None,
+                speaker_confidence: None,
             },
             transcriber::Segment {
                 start: 3.0,
@@ -89,6 +91,8 @@ fn output_formats_roundtrip() {
                 speaker_turn: true,
                 no_speech_probability: 0.05,
                 words: None,
+                speaker_id: None,
+                speaker_confidence: None,
             },
         ],
         language: "en".into(),

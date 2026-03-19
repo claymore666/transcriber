@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 use transcriber::{Language, Model, TranscribeOptions};
 
 #[derive(Parser)]
 #[command(name = "transcriber", about = "Transcribe audio/video from URL or file")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// URL or local file path to transcribe.
-    #[arg(required_unless_present_any = ["list_models", "download_model", "list_languages"])]
     input: Option<String>,
 
     /// Output format.
@@ -89,6 +91,83 @@ struct Cli {
     /// List supported languages.
     #[arg(long)]
     list_languages: bool,
+
+    // --- Speaker identification flags ---
+
+    /// Enable speaker identification.
+    #[arg(long)]
+    speaker_id: bool,
+
+    /// Path to speaker profiles JSON file.
+    #[arg(long)]
+    speaker_profiles: Option<PathBuf>,
+
+    /// Path to wespeaker ONNX model.
+    #[arg(long)]
+    speaker_model: Option<PathBuf>,
+
+    /// Speaker identification confidence threshold (0.0-1.0).
+    #[arg(long, default_value = "0.6")]
+    speaker_threshold: f32,
+
+    /// Download the speaker embedding model.
+    #[arg(long)]
+    download_speaker_model: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Enroll a speaker from an audio file.
+    Enroll {
+        /// Speaker name.
+        #[arg(long)]
+        name: String,
+
+        /// Audio file to enroll from.
+        #[arg(long)]
+        audio: PathBuf,
+
+        /// Start time (e.g. "01:23" or "83.5").
+        #[arg(long)]
+        start: Option<String>,
+
+        /// End time (e.g. "02:45" or "165.0").
+        #[arg(long)]
+        end: Option<String>,
+
+        /// Path to speaker profiles.
+        #[arg(long)]
+        profiles: Option<PathBuf>,
+
+        /// Path to speaker embedding model.
+        #[arg(long)]
+        speaker_model: Option<PathBuf>,
+    },
+
+    /// Manage speaker profiles.
+    Speakers {
+        #[command(subcommand)]
+        action: SpeakersAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SpeakersAction {
+    /// List enrolled speakers.
+    List {
+        /// Path to speaker profiles.
+        #[arg(long)]
+        profiles: Option<PathBuf>,
+    },
+    /// Remove a speaker profile.
+    Remove {
+        /// Speaker name to remove.
+        #[arg(long)]
+        name: String,
+        /// Path to speaker profiles.
+        #[arg(long)]
+        profiles: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -110,6 +189,27 @@ async fn main() {
         )
         .with_writer(std::io::stderr)
         .init();
+
+    // Handle subcommands first
+    if let Some(command) = cli.command {
+        match command {
+            Command::Enroll {
+                name,
+                audio,
+                start,
+                end,
+                profiles,
+                speaker_model,
+            } => {
+                cmd_enroll(name, audio, start, end, profiles, speaker_model).await;
+            }
+            Command::Speakers { action } => match action {
+                SpeakersAction::List { profiles } => cmd_speakers_list(profiles),
+                SpeakersAction::Remove { name, profiles } => cmd_speakers_remove(name, profiles),
+            },
+        }
+        return;
+    }
 
     if cli.list_languages {
         println!("{:<6} LANGUAGE", "CODE");
@@ -182,13 +282,34 @@ async fn main() {
         return;
     }
 
-    let input = cli.input.unwrap();
+    if cli.download_speaker_model {
+        let opts = TranscribeOptions::default();
+        let cache_dir = cli.cache_dir.unwrap_or_else(|| opts.resolve_cache_dir());
+        match transcriber::speaker::ensure_speaker_model(&cache_dir).await {
+            Ok(path) => println!("Speaker model ready: {}", path.display()),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    let input = match cli.input {
+        Some(i) => i,
+        None => {
+            eprintln!("Error: no input specified. Provide a URL or file path.");
+            eprintln!("Usage: transcriber-cli <INPUT> [OPTIONS]");
+            eprintln!("       transcriber-cli enroll --name <NAME> --audio <AUDIO>");
+            eprintln!("       transcriber-cli speakers list");
+            std::process::exit(1);
+        }
+    };
 
     // Build options
     let model = match Model::parse_name(&cli.model) {
         Some(m) => m,
         None => {
-            // Try as custom model path
             let path = PathBuf::from(&cli.model);
             if path.exists() {
                 Model::Custom(path)
@@ -251,6 +372,18 @@ async fn main() {
         opts = opts.cache_dir(dir);
     }
 
+    // Speaker identification options
+    if cli.speaker_id {
+        opts = opts.speaker_identification(true)
+            .speaker_threshold(cli.speaker_threshold);
+        if let Some(path) = cli.speaker_profiles {
+            opts = opts.speaker_profiles_path(path);
+        }
+        if let Some(path) = cli.speaker_model {
+            opts = opts.speaker_model_path(path);
+        }
+    }
+
     // Determine if input is a URL or file
     let is_url = input.starts_with("http://") || input.starts_with("https://");
 
@@ -275,6 +408,11 @@ async fn main() {
         transcript.language,
     );
 
+    // Print speaker summary if identification was used
+    if cli.speaker_id {
+        print_speaker_summary(&transcript);
+    }
+
     let output_text = match cli.format {
         OutputFormat::Text => transcript.text(),
         OutputFormat::Srt => transcript.to_srt(),
@@ -297,6 +435,210 @@ async fn main() {
             eprintln!("Written to {}", path.display());
         }
         None => print!("{output_text}"),
+    }
+}
+
+/// Enroll a speaker from an audio file.
+async fn cmd_enroll(
+    name: String,
+    audio: PathBuf,
+    start: Option<String>,
+    end: Option<String>,
+    profiles: Option<PathBuf>,
+    speaker_model: Option<PathBuf>,
+) {
+    let profiles_path = profiles.unwrap_or_else(transcriber::speaker::default_profiles_path);
+
+    // Ensure speaker model is available
+    let opts = TranscribeOptions::default();
+    let cache_dir = opts.resolve_cache_dir();
+    let model_path = match speaker_model {
+        Some(p) => p,
+        None => match transcriber::speaker::ensure_speaker_model(&cache_dir).await {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("Error loading speaker model: {e}");
+                std::process::exit(1);
+            }
+        },
+    };
+
+    // Load audio
+    let processing = transcriber::AudioProcessing::default();
+    let audio_clone = audio.clone();
+    let samples = match tokio::task::spawn_blocking(move || {
+        transcriber::__test_load_audio(&audio_clone, &processing)
+    })
+    .await
+    {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            eprintln!("Error loading audio: {e}");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Extract time range if specified
+    let samples = if start.is_some() || end.is_some() {
+        let total_duration = samples.len() as f64 / 16000.0;
+        let start_secs = start.map(|s| parse_time(&s)).unwrap_or(0.0);
+        let end_secs = end.map(|s| parse_time(&s)).unwrap_or(total_duration);
+
+        let start_sample = (start_secs * 16000.0) as usize;
+        let end_sample = (end_secs * 16000.0) as usize;
+        let start_sample = start_sample.min(samples.len());
+        let end_sample = end_sample.min(samples.len());
+
+        if end_sample <= start_sample {
+            eprintln!("Error: invalid time range ({start_secs:.1}s - {end_secs:.1}s)");
+            std::process::exit(1);
+        }
+
+        eprintln!(
+            "Using time range {start_secs:.1}s - {end_secs:.1}s ({:.1}s)",
+            (end_sample - start_sample) as f64 / 16000.0
+        );
+        samples[start_sample..end_sample].to_vec()
+    } else {
+        samples
+    };
+
+    // Create identifier and enroll
+    let result = tokio::task::spawn_blocking(move || -> Result<(), transcriber::Error> {
+        let mut identifier = transcriber::speaker::SpeakerIdentifier::new(
+            &model_path,
+            &profiles_path,
+            0.6,
+            &[transcriber::speaker::ExecutionProvider::Cpu],
+        )?;
+        identifier.enroll(&name, &samples)?;
+        identifier.save_profiles(&profiles_path)?;
+        let profile = identifier.profiles().find(&name).unwrap();
+        eprintln!(
+            "Enrolled '{}' ({} sample(s))",
+            profile.name,
+            profile.embeddings.len()
+        );
+        Ok(())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// List enrolled speakers.
+fn cmd_speakers_list(profiles: Option<PathBuf>) {
+    let profiles_path = profiles.unwrap_or_else(transcriber::speaker::default_profiles_path);
+    let store = match transcriber::speaker::ProfileStore::load(&profiles_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error loading profiles: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if store.profiles.is_empty() {
+        println!("No speakers enrolled.");
+        println!("Profiles path: {}", profiles_path.display());
+        return;
+    }
+
+    println!("{:<20} {:<8} ENROLLED", "NAME", "SAMPLES");
+    println!("{:<20} {:<8} --------", "----", "-------");
+    for profile in &store.profiles {
+        println!(
+            "{:<20} {:<8} {}",
+            profile.name,
+            profile.embeddings.len(),
+            profile.enrolled_at,
+        );
+    }
+    println!("\nProfiles path: {}", profiles_path.display());
+}
+
+/// Remove a speaker profile.
+fn cmd_speakers_remove(name: String, profiles: Option<PathBuf>) {
+    let profiles_path = profiles.unwrap_or_else(transcriber::speaker::default_profiles_path);
+    let mut store = match transcriber::speaker::ProfileStore::load(&profiles_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error loading profiles: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if store.remove(&name) {
+        if let Err(e) = store.save(&profiles_path) {
+            eprintln!("Error saving profiles: {e}");
+            std::process::exit(1);
+        }
+        println!("Removed '{name}'");
+    } else {
+        eprintln!("Speaker '{name}' not found");
+        std::process::exit(1);
+    }
+}
+
+/// Print a summary of speaker identification results.
+fn print_speaker_summary(transcript: &transcriber::Transcript) {
+    use std::collections::HashMap;
+    let mut counts: HashMap<&str, (u32, f32)> = HashMap::new();
+
+    for seg in &transcript.segments {
+        if let Some(speaker) = &seg.speaker_id {
+            let entry = counts.entry(speaker.as_str()).or_insert((0, 0.0));
+            entry.0 += 1;
+            entry.1 += seg.speaker_confidence.unwrap_or(0.0);
+        }
+    }
+
+    if counts.is_empty() {
+        return;
+    }
+
+    eprintln!("\nSpeaker summary:");
+    let mut sorted: Vec<_> = counts.iter().collect();
+    sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    for (name, (count, total_conf)) in sorted {
+        let avg_conf = total_conf / *count as f32;
+        eprintln!("  {name}: {count} segments (avg confidence {avg_conf:.2})");
+    }
+}
+
+/// Parse a time string like "01:23" or "83.5" into seconds.
+fn parse_time(s: &str) -> f64 {
+    if s.contains(':') {
+        let parts: Vec<&str> = s.split(':').collect();
+        match parts.len() {
+            2 => {
+                let mins: f64 = parts[0].parse().unwrap_or(0.0);
+                let secs: f64 = parts[1].parse().unwrap_or(0.0);
+                mins * 60.0 + secs
+            }
+            3 => {
+                let hours: f64 = parts[0].parse().unwrap_or(0.0);
+                let mins: f64 = parts[1].parse().unwrap_or(0.0);
+                let secs: f64 = parts[2].parse().unwrap_or(0.0);
+                hours * 3600.0 + mins * 60.0 + secs
+            }
+            _ => s.parse().unwrap_or(0.0),
+        }
+    } else {
+        s.parse().unwrap_or(0.0)
     }
 }
 
