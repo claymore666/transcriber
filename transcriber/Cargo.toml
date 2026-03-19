@@ -14,14 +14,14 @@ rust-version = "1.82"
 
 [features]
 default = ["download"]
-download = ["dep:tokio"]
+download = ["tokio/process", "tokio/fs"]
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 diarize = []
 
 [dependencies]
 whisper-rs = "0.15"
-tokio = { version = "1", features = ["process", "fs"], optional = true }
+tokio = { version = "1", features = ["rt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
