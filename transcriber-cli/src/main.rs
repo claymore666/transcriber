@@ -112,8 +112,8 @@ async fn main() {
         .init();
 
     if cli.list_languages {
-        println!("{:<6} {}", "CODE", "LANGUAGE");
-        println!("{:<6} {}", "----", "--------");
+        println!("{:<6} LANGUAGE", "CODE");
+        println!("{:<6} --------", "----");
         for (code, name) in Language::supported() {
             println!("{code:<6} {name}");
         }
@@ -134,8 +134,8 @@ async fn main() {
             ("large-v3", "2.9 GB"),
             ("large-v3-turbo", "~1.6 GB"),
         ];
-        println!("{:<16} {}", "MODEL", "SIZE");
-        println!("{:<16} {}", "-----", "----");
+        println!("{:<16} SIZE", "MODEL");
+        println!("{:<16} ----", "-----");
         for (name, size) in models {
             println!("{name:<16} {size}");
         }

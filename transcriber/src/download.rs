@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use serde::Deserialize;
 use tracing::{debug, info, warn};
 
 use crate::error::{Error, Result};
@@ -8,17 +8,13 @@ use crate::error::{Error, Result};
 /// Maximum bytes to read from yt-dlp stdout/stderr (10 MB).
 const MAX_SUBPROCESS_OUTPUT: usize = 10_000_000;
 
+/// Timeout for yt-dlp subprocess (10 minutes).
+const YTDLP_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Result of downloading audio from a URL.
 pub struct DownloadResult {
     pub audio_path: PathBuf,
     pub title: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct YtDlpInfo {
-    title: Option<String>,
-    duration: Option<f64>,
 }
 
 /// Validate that a string looks like a URL.
@@ -69,45 +65,34 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
         })?
         .to_string();
 
-    // First, get metadata
-    let info_output = tokio::process::Command::new("yt-dlp")
-        .args(["--dump-json", "--no-download", "--no-exec"])
-        .arg(url)
-        .output()
-        .await?;
-
-    let info: Option<YtDlpInfo> = if info_output.status.success()
-        && info_output.stdout.len() <= MAX_SUBPROCESS_OUTPUT
-    {
-        match serde_json::from_slice(&info_output.stdout) {
-            Ok(info) => Some(info),
-            Err(e) => {
-                warn!("failed to parse yt-dlp metadata: {e}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Download best audio, extract as WAV for maximum compatibility
-    let output = tokio::process::Command::new("yt-dlp")
-        .args([
-            "--extract-audio",
-            "--audio-format",
-            "wav",
-            "--audio-quality",
-            "0",
-            "--no-playlist",
-            "--no-exec",
-            "--output",
-            &output_template,
-            "--print",
-            "after_move:filepath",
-        ])
-        .arg(url)
-        .output()
-        .await?;
+    // Single yt-dlp call: download audio and print title + filepath
+    let output = tokio::time::timeout(
+        YTDLP_TIMEOUT,
+        tokio::process::Command::new("yt-dlp")
+            .args([
+                "--extract-audio",
+                "--audio-format",
+                "wav",
+                "--audio-quality",
+                "0",
+                "--no-playlist",
+                "--no-exec",
+                "--output",
+                &output_template,
+                // Print title and final filepath, separated by newline
+                "--print",
+                "title",
+                "--print",
+                "after_move:filepath",
+            ])
+            .arg(url)
+            .output(),
+    )
+    .await
+    .map_err(|_| Error::Download(format!(
+        "yt-dlp timed out after {} seconds", YTDLP_TIMEOUT.as_secs()
+    )))?
+    .map_err(Error::Io)?;
 
     if !output.status.success() {
         let stderr_bytes = &output.stderr[..output.stderr.len().min(4000)];
@@ -119,16 +104,17 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
         return Err(Error::Download("yt-dlp produced unexpectedly large output".into()));
     }
 
-    let audio_path_str = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .to_string();
+    // Parse --print output: first line is title, second is filepath
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.trim().lines();
+    let title = lines.next().map(|s| s.to_string());
+    let filepath_line = lines.next().unwrap_or("").to_string();
 
-    // yt-dlp --print after_move:filepath gives us the final path
-    let audio_path = if audio_path_str.is_empty() {
+    let audio_path = if filepath_line.is_empty() {
         // Fallback: find the file in output_dir
         find_audio_file(output_dir)?
     } else {
-        let candidate = PathBuf::from(&audio_path_str);
+        let candidate = PathBuf::from(&filepath_line);
         // Validate the returned path is inside output_dir
         validate_path_in_dir(&candidate, output_dir)?;
         candidate
@@ -145,7 +131,7 @@ pub async fn download_audio(url: &str, output_dir: &Path) -> Result<DownloadResu
 
     Ok(DownloadResult {
         audio_path,
-        title: info.as_ref().and_then(|i| i.title.clone()),
+        title,
     })
 }
 

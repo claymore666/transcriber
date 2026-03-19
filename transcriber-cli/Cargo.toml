@@ -9,7 +9,7 @@ repository = "https://github.com/claymore666/transcriber"
 homepage = "https://github.com/claymore666/transcriber"
 keywords = ["transcription", "whisper", "audio", "video", "cli"]
 categories = ["command-line-utilities", "multimedia::audio"]
-rust-version = "1.75"
+rust-version = "1.82"
 
 [dependencies]
 transcriber = { path = "../transcriber", features = ["download"] }

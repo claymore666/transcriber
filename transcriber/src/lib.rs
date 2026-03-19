@@ -36,6 +36,15 @@ pub use config::{AudioProcessing, Language, Model, TranscribeOptions};
 pub use error::{Error, Result};
 pub use types::{Segment, Transcript, Word};
 
+/// Test-only access to audio loading (not part of the public API).
+#[doc(hidden)]
+pub fn __test_load_audio(
+    path: &std::path::Path,
+    processing: &AudioProcessing,
+) -> Result<Vec<f32>> {
+    audio::load_audio(path, processing)
+}
+
 use std::path::Path;
 
 /// Transcribe a local audio/video file with default options.
@@ -48,17 +57,28 @@ pub async fn transcribe_file_with_options(
     path: impl AsRef<Path>,
     options: &TranscribeOptions,
 ) -> Result<Transcript> {
-    let path = path.as_ref();
+    let path = path.as_ref().to_path_buf();
 
     // Ensure model is available
     let cache_dir = options.resolve_cache_dir();
     let model_path = model::ensure_model(&options.model, &cache_dir).await?;
 
-    // Load and process audio
-    let samples = audio::load_audio(path, &options.audio_processing)?;
+    // Load and process audio (blocking ffmpeg subprocess)
+    let processing = options.audio_processing.clone();
+    let samples = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || audio::load_audio(&path, &processing)
+    })
+    .await
+    .map_err(|e| Error::Transcription(format!("audio loading task failed: {e}")))??;
 
-    // Transcribe
-    let transcript = transcribe::transcribe_samples(&samples, &model_path, options)?;
+    // Transcribe (blocking CPU-intensive whisper inference)
+    let options = options.clone();
+    let transcript = tokio::task::spawn_blocking(move || {
+        transcribe::transcribe_samples(&samples, &model_path, &options)
+    })
+    .await
+    .map_err(|e| Error::Transcription(format!("transcription task failed: {e}")))??;
 
     Ok(transcript)
 }
@@ -93,11 +113,22 @@ pub async fn transcribe_with_options(
     let cache_dir = options.resolve_cache_dir();
     let model_path = model::ensure_model(&options.model, &cache_dir).await?;
 
-    // Load and process audio
-    let samples = audio::load_audio(&download_result.audio_path, &options.audio_processing)?;
+    // Load and process audio (blocking ffmpeg subprocess)
+    let processing = options.audio_processing.clone();
+    let audio_path = download_result.audio_path.clone();
+    let samples = tokio::task::spawn_blocking(move || {
+        audio::load_audio(&audio_path, &processing)
+    })
+    .await
+    .map_err(|e| Error::Transcription(format!("audio loading task failed: {e}")))??;
 
-    // Transcribe
-    let mut transcript = transcribe::transcribe_samples(&samples, &model_path, options)?;
+    // Transcribe (blocking CPU-intensive whisper inference)
+    let options_clone = options.clone();
+    let mut transcript = tokio::task::spawn_blocking(move || {
+        transcribe::transcribe_samples(&samples, &model_path, &options_clone)
+    })
+    .await
+    .map_err(|e| Error::Transcription(format!("transcription task failed: {e}")))??;
 
     // Attach source metadata
     transcript.source_url = Some(url.to_string());

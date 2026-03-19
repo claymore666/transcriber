@@ -101,7 +101,7 @@ pub fn transcribe_samples(
     info!(samples = samples.len(), "running transcription");
     state.full(params, samples)?;
 
-    let num_segments = state.full_n_segments();
+    let num_segments = state.full_n_segments().max(0);
     debug!(num_segments, "transcription complete");
 
     let mut segments = Vec::with_capacity(num_segments as usize);

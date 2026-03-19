@@ -10,7 +10,7 @@ homepage = "https://github.com/claymore666/transcriber"
 keywords = ["transcription", "whisper", "audio", "video", "subtitle"]
 categories = ["multimedia::audio"]
 readme = "../README.md"
-rust-version = "1.75"
+rust-version = "1.82"
 
 [features]
 default = ["download"]

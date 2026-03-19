@@ -11,9 +11,10 @@ use crate::error::Error;
 ///
 /// Use `Language::Auto` for automatic detection, or `Language::new("en")` for
 /// a specific language.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum Language {
     /// Auto-detect language from audio.
+    #[default]
     Auto,
     /// A validated language code (e.g. "en", "de", "ja").
     Code {
@@ -82,14 +83,8 @@ impl fmt::Display for Language {
     }
 }
 
-impl Default for Language {
-    fn default() -> Self {
-        Language::Auto
-    }
-}
-
 /// Whisper model sizes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Model {
     Tiny,
     TinyEn,

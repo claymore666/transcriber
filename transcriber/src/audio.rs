@@ -1,5 +1,6 @@
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use tracing::{debug, info};
 
@@ -14,9 +15,9 @@ pub const WHISPER_SAMPLE_RATE: u32 = 16_000;
 /// 8 hours at 16kHz mono f32 = ~1.8 GB.
 const MAX_AUDIO_DURATION_SECS: f64 = 8.0 * 3600.0;
 
-/// Maximum raw PCM bytes we accept from ffmpeg (2 GB).
-/// 8 hours at 16kHz mono s16le = ~922 MB, so 2 GB has plenty of headroom.
-const MAX_FFMPEG_OUTPUT_BYTES: usize = 2_000_000_000;
+/// Maximum raw PCM samples we accept from ffmpeg.
+/// 8 hours at 16kHz mono = ~460M samples.
+const MAX_FFMPEG_OUTPUT_SAMPLES: usize = 500_000_000;
 
 /// Maximum stderr bytes to include in error messages.
 const MAX_STDERR_BYTES: usize = 4_000;
@@ -118,10 +119,11 @@ fn probe_duration(path: &Path) -> Option<f64> {
 
 /// Decode any audio file to 16kHz mono f32 via ffmpeg subprocess.
 ///
-/// ffmpeg handles decoding, resampling, and channel mixing in one shot.
-/// Output format is raw PCM signed 16-bit little-endian, which we convert to f32.
+/// Streams ffmpeg's stdout incrementally to avoid holding the entire raw PCM
+/// output in memory alongside the converted f32 samples. Converts s16le chunks
+/// to f32 on the fly.
 fn decode_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
-    let output = Command::new("ffmpeg")
+    let mut child = Command::new("ffmpeg")
         .args([
             "-nostdin",
             "-loglevel",
@@ -150,7 +152,9 @@ fn decode_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
             &WHISPER_SAMPLE_RATE.to_string(),
             "-",
         ])
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::AudioDecode(
@@ -161,40 +165,59 @@ fn decode_with_ffmpeg(path: &Path) -> Result<Vec<f32>> {
             }
         })?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(
-            &output.stderr[..output.stderr.len().min(MAX_STDERR_BYTES)],
-        );
+    let stdout = child.stdout.take()
+        .ok_or_else(|| Error::AudioDecode("failed to capture ffmpeg stdout".into()))?;
+
+    // Read and convert s16le -> f32 in 8 KB chunks (4096 samples per read).
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut samples = Vec::new();
+    let mut buf = [0u8; 8192];
+
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| {
+            Error::AudioDecode(format!("error reading ffmpeg output: {e}"))
+        })?;
+        if n == 0 {
+            break;
+        }
+
+        // Process complete s16le sample pairs from the buffer
+        let usable = n - (n % 2);
+        for chunk in buf[..usable].chunks_exact(2) {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+            samples.push(sample as f32 / 32768.0);
+        }
+
+        if samples.len() > MAX_FFMPEG_OUTPUT_SAMPLES {
+            // Kill the child to avoid leaving an orphan
+            let _ = child.kill();
+            return Err(Error::AudioDecode(format!(
+                "ffmpeg output too large ({} samples, max {})",
+                samples.len(),
+                MAX_FFMPEG_OUTPUT_SAMPLES
+            )));
+        }
+    }
+
+    // Drop the reader so stdout is closed, then wait for the process
+    drop(reader);
+    let status = child.wait().map_err(|e| {
+        Error::AudioDecode(format!("failed to wait for ffmpeg: {e}"))
+    })?;
+
+    if !status.success() {
+        // Read stderr for error context (child.stderr is still available)
+        let mut stderr_buf = Vec::new();
+        if let Some(stderr) = child.stderr.take() {
+            let _ = stderr.take(MAX_STDERR_BYTES as u64).read_to_end(&mut stderr_buf);
+        }
+        let stderr = String::from_utf8_lossy(&stderr_buf);
         return Err(Error::AudioDecode(format!("ffmpeg failed: {stderr}")));
     }
 
-    if output.stdout.is_empty() {
+    if samples.is_empty() {
         return Err(Error::AudioDecode("ffmpeg produced no output".into()));
     }
-
-    if output.stdout.len() > MAX_FFMPEG_OUTPUT_BYTES {
-        return Err(Error::AudioDecode(format!(
-            "ffmpeg output too large ({} bytes, max {})",
-            output.stdout.len(),
-            MAX_FFMPEG_OUTPUT_BYTES
-        )));
-    }
-
-    if output.stdout.len() % 2 != 0 {
-        return Err(Error::AudioDecode(
-            "ffmpeg produced odd byte count — expected s16le (2 bytes per sample)".into(),
-        ));
-    }
-
-    // Convert s16le bytes to f32 samples, normalized to [-1.0, 1.0]
-    let samples: Vec<f32> = output
-        .stdout
-        .chunks_exact(2)
-        .map(|chunk| {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-            sample as f32 / 32768.0
-        })
-        .collect();
 
     Ok(samples)
 }
@@ -377,7 +400,7 @@ mod tests {
         let path = fixtures_dir().join("sine_440hz_2s.wav");
         let samples = load_audio(&path, &AudioProcessing::default()).unwrap();
         for &s in &samples {
-            assert!(s >= -1.0 && s <= 1.0, "sample {s} out of range");
+            assert!((-1.0..=1.0).contains(&s), "sample {s} out of range");
         }
     }
 

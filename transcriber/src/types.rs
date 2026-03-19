@@ -43,31 +43,29 @@ impl Transcript {
 
     /// Format as SRT subtitles.
     pub fn to_srt(&self) -> String {
+        use std::fmt::Write;
         let mut out = String::new();
         for (i, seg) in self.segments.iter().enumerate() {
-            out.push_str(&format!("{}\n", i + 1));
-            out.push_str(&format!(
-                "{} --> {}\n",
+            let _ = writeln!(out, "{}", i + 1);
+            let _ = writeln!(out, "{} --> {}",
                 format_srt_time(seg.start),
-                format_srt_time(seg.end)
-            ));
-            out.push_str(seg.text.trim());
-            out.push_str("\n\n");
+                format_srt_time(seg.end),
+            );
+            let _ = writeln!(out, "{}\n", seg.text.trim());
         }
         out
     }
 
     /// Format as WebVTT subtitles.
     pub fn to_vtt(&self) -> String {
+        use std::fmt::Write;
         let mut out = String::from("WEBVTT\n\n");
         for seg in &self.segments {
-            out.push_str(&format!(
-                "{} --> {}\n",
+            let _ = writeln!(out, "{} --> {}",
                 format_vtt_time(seg.start),
-                format_vtt_time(seg.end)
-            ));
-            out.push_str(seg.text.trim());
-            out.push_str("\n\n");
+                format_vtt_time(seg.end),
+            );
+            let _ = writeln!(out, "{}\n", seg.text.trim());
         }
         out
     }
@@ -85,22 +83,22 @@ impl Transcript {
 
 /// Format seconds as SRT timestamp: HH:MM:SS,mmm
 fn format_srt_time(seconds: f64) -> String {
-    let total_ms = (seconds.max(0.0) * 1000.0).round() as u64;
-    let h = total_ms / 3_600_000;
-    let m = (total_ms % 3_600_000) / 60_000;
-    let s = (total_ms % 60_000) / 1_000;
-    let ms = total_ms % 1_000;
-    format!("{h:02}:{m:02}:{s:02},{ms:03}")
+    format_timestamp(seconds, ',')
 }
 
 /// Format seconds as VTT timestamp: HH:MM:SS.mmm
 fn format_vtt_time(seconds: f64) -> String {
+    format_timestamp(seconds, '.')
+}
+
+/// Format seconds as HH:MM:SS{sep}mmm timestamp.
+fn format_timestamp(seconds: f64, sep: char) -> String {
     let total_ms = (seconds.max(0.0) * 1000.0).round() as u64;
     let h = total_ms / 3_600_000;
     let m = (total_ms % 3_600_000) / 60_000;
     let s = (total_ms % 60_000) / 1_000;
     let ms = total_ms % 1_000;
-    format!("{h:02}:{m:02}:{s:02}.{ms:03}")
+    format!("{h:02}:{m:02}:{s:02}{sep}{ms:03}")
 }
 
 #[cfg(test)]
@@ -240,7 +238,7 @@ mod tests {
         assert_eq!(deserialized.model, "large-v3");
         assert_eq!(deserialized.source_url.as_deref(), Some("https://example.com/video"));
         assert_eq!(deserialized.segments[0].text, " Hello world.");
-        assert_eq!(deserialized.segments[1].speaker_turn, true);
+        assert!(deserialized.segments[1].speaker_turn);
     }
 
     #[test]
