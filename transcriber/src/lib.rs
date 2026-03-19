@@ -36,7 +36,7 @@ pub mod types;
 
 pub use config::{AudioProcessing, Language, Model, TranscribeOptions};
 pub use error::{Error, Result};
-pub use types::{Segment, Transcript, Word};
+pub use types::{Segment, SpeakerIdSummary, Transcript, Word};
 
 /// Test-only access to audio loading (not part of the public API).
 #[doc(hidden)]
@@ -87,7 +87,17 @@ pub async fn transcribe_file_with_options(
     // Speaker identification pass (if enabled)
     #[cfg(feature = "speaker-id")]
     if options.speaker_identification {
-        run_speaker_identification(&mut transcript, &samples, options).await?;
+        let summary = run_speaker_identification(&mut transcript, &samples, options).await?;
+        transcript.speaker_summary = Some(Box::new(SpeakerIdSummary {
+            identified: summary.identified,
+            unknown: summary.unknown,
+            skipped: summary.skipped,
+            merged: summary.merged,
+            smoothed: summary.smoothed,
+            unknown_clusters: summary.unknown_clusters.iter().map(|c| {
+                (c.segment_count, c.total_duration, c.representative_start, c.representative_end)
+            }).collect(),
+        }));
     }
 
     Ok(transcript)
@@ -145,7 +155,17 @@ pub async fn transcribe_with_options(
     // Speaker identification pass (if enabled)
     #[cfg(feature = "speaker-id")]
     if options.speaker_identification {
-        run_speaker_identification(&mut transcript, &samples, options).await?;
+        let summary = run_speaker_identification(&mut transcript, &samples, options).await?;
+        transcript.speaker_summary = Some(Box::new(SpeakerIdSummary {
+            identified: summary.identified,
+            unknown: summary.unknown,
+            skipped: summary.skipped,
+            merged: summary.merged,
+            smoothed: summary.smoothed,
+            unknown_clusters: summary.unknown_clusters.iter().map(|c| {
+                (c.segment_count, c.total_duration, c.representative_start, c.representative_end)
+            }).collect(),
+        }));
     }
 
     // Attach source metadata
@@ -156,12 +176,15 @@ pub async fn transcribe_with_options(
 }
 
 /// Run speaker identification on a completed transcript.
+///
+/// Returns a [`speaker::SpeakerSummary`] with identification statistics,
+/// including unknown cluster suggestions for potential enrollment.
 #[cfg(feature = "speaker-id")]
 async fn run_speaker_identification(
     transcript: &mut Transcript,
     samples: &[f32],
     options: &TranscribeOptions,
-) -> Result<()> {
+) -> Result<speaker::SpeakerSummary> {
     let cache_dir = options.resolve_cache_dir();
     let model_path = match &options.speaker_model_path {
         Some(p) => p.clone(),
@@ -177,21 +200,23 @@ async fn run_speaker_identification(
     let mut segments = std::mem::take(&mut transcript.segments);
 
     // Speaker ID is CPU/GPU bound — run in blocking context
-    let segments = tokio::task::spawn_blocking(move || -> Result<Vec<types::Segment>> {
-        let mut identifier = speaker::SpeakerIdentifier::new(
-            &model_path,
-            &profiles_path,
-            threshold,
-            &[speaker::ExecutionProvider::Cpu],
-        )?;
-        identifier.identify_segments(&mut segments, &samples)?;
-        Ok(segments)
-    })
+    let (segments, summary) = tokio::task::spawn_blocking(
+        move || -> Result<(Vec<types::Segment>, speaker::SpeakerSummary)> {
+            let mut identifier = speaker::SpeakerIdentifier::new(
+                &model_path,
+                &profiles_path,
+                threshold,
+                &[speaker::ExecutionProvider::Cpu],
+            )?;
+            let summary = identifier.identify_segments(&mut segments, &samples)?;
+            Ok((segments, summary))
+        },
+    )
     .await
     .map_err(|e| Error::Transcription(format!("speaker identification task failed: {e}")))??;
 
     transcript.segments = segments;
-    Ok(())
+    Ok(summary)
 }
 
 /// RAII guard that removes an entire temp directory when dropped.

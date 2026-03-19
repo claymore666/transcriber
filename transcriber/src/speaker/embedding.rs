@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use ndarray::{Array2, Axis};
+use nnnoiseless::DenoiseState;
 use ort::session::Session;
 use ort::value::Tensor;
 use tracing::{debug, info};
@@ -136,20 +137,49 @@ pub fn create_session(
     Ok(session)
 }
 
+/// Apply RNNoise denoising to audio samples.
+///
+/// Cleans background noise (HVAC, paper rustling, cross-talk) from the audio
+/// before fbank extraction. This significantly improves speaker embedding quality
+/// for room mic recordings where noise features would otherwise dominate the
+/// mel filterbank.
+///
+/// Input/output: f32 samples at 16kHz mono.
+fn denoise(audio: &[f32]) -> Vec<f32> {
+    let mut state = DenoiseState::new();
+    let mut output = Vec::with_capacity(audio.len());
+
+    // RNNoise processes 480-sample frames (30ms at 16kHz)
+    const FRAME_SIZE: usize = DenoiseState::FRAME_SIZE; // 480
+
+    for chunk in audio.chunks(FRAME_SIZE) {
+        let mut input_frame = [0.0f32; FRAME_SIZE];
+        let mut output_frame = [0.0f32; FRAME_SIZE];
+        input_frame[..chunk.len()].copy_from_slice(chunk);
+        state.process_frame(&mut output_frame, &input_frame);
+        output.extend_from_slice(&output_frame[..chunk.len()]);
+    }
+
+    output
+}
+
 /// Extract a speaker embedding from audio samples.
 ///
-/// Pipeline: audio -> fbank features -> CMN -> ONNX inference -> L2 normalize.
+/// Pipeline: audio -> RNNoise denoise -> fbank features -> CMN -> ONNX inference -> L2 normalize.
 pub fn extract_embedding(session: &mut Session, samples: &[f32]) -> Result<Vec<f32>> {
-    // 1. Compute fbank features: [num_frames, 80]
-    let features = compute_fbank(samples)?;
+    // 1. Denoise audio to remove background noise before feature extraction
+    let denoised = denoise(samples);
 
-    // 2. Add batch dimension: [1, num_frames, 80]
+    // 2. Compute fbank features: [num_frames, 80]
+    let features = compute_fbank(&denoised)?;
+
+    // 3. Add batch dimension: [1, num_frames, 80]
     let shape = features.shape().to_vec();
     let features_3d = features
         .into_shape_with_order((1, shape[0], shape[1]))
         .map_err(|e| Error::SpeakerId(format!("failed to reshape features: {e}")))?;
 
-    // 3. Run ONNX inference (Tensor::from_array takes ownership)
+    // 4. Run ONNX inference (Tensor::from_array takes ownership)
     let input_tensor = Tensor::from_array(features_3d)
         .map_err(|e| Error::SpeakerId(format!("failed to create input tensor: {e}")))?;
     let outputs = session
@@ -165,7 +195,7 @@ pub fn extract_embedding(session: &mut Session, samples: &[f32]) -> Result<Vec<f
         Error::SpeakerId(format!("failed to extract embedding tensor: {e}"))
     })?;
 
-    // 4. L2 normalize
+    // 5. L2 normalize
     let embedding: Vec<f32> = data.to_vec();
     let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm < 1e-12 {
@@ -224,6 +254,75 @@ mod tests {
         let samples = vec![0.0f32; 160];
         // Just verify it doesn't panic
         let _ = compute_fbank(&samples);
+    }
+
+    #[test]
+    fn test_denoise_preserves_length() {
+        // 2 seconds of audio at 16kHz
+        let samples: Vec<f32> = (0..32_000)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin() * 0.5)
+            .collect();
+        let denoised = denoise(&samples);
+        assert_eq!(denoised.len(), samples.len());
+    }
+
+    #[test]
+    fn test_denoise_non_frame_aligned_length() {
+        // Length not divisible by 480 (RNNoise frame size)
+        let samples = vec![0.1f32; 1000];
+        let denoised = denoise(&samples);
+        assert_eq!(denoised.len(), 1000);
+    }
+
+    #[test]
+    fn test_denoise_empty_input() {
+        let denoised = denoise(&[]);
+        assert!(denoised.is_empty());
+    }
+
+    #[test]
+    fn test_denoise_single_frame() {
+        // Exactly one RNNoise frame (480 samples)
+        let samples = vec![0.1f32; 480];
+        let denoised = denoise(&samples);
+        assert_eq!(denoised.len(), 480);
+    }
+
+    #[test]
+    fn test_denoise_reduces_noise_on_silence() {
+        // Pure silence should remain near-silent after denoising
+        let samples = vec![0.0f32; 16_000];
+        let denoised = denoise(&samples);
+        let rms: f32 = (denoised.iter().map(|x| x * x).sum::<f32>() / denoised.len() as f32).sqrt();
+        assert!(rms < 0.01, "denoised silence should have near-zero RMS, got {rms}");
+    }
+
+    #[test]
+    fn test_denoise_does_not_destroy_speech_signal() {
+        // A 440Hz sine (speech-like frequency) should retain significant energy after denoising
+        let samples: Vec<f32> = (0..16_000)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin() * 0.5)
+            .collect();
+        let input_rms: f32 = (samples.iter().map(|x| x * x).sum::<f32>() / samples.len() as f32).sqrt();
+
+        let denoised = denoise(&samples);
+        let output_rms: f32 = (denoised.iter().map(|x| x * x).sum::<f32>() / denoised.len() as f32).sqrt();
+
+        // RNNoise may attenuate pure tones somewhat, but shouldn't zero them out
+        assert!(output_rms > input_rms * 0.01,
+            "denoised signal lost too much energy: input_rms={input_rms}, output_rms={output_rms}");
+    }
+
+    #[test]
+    fn test_denoise_fbank_produces_valid_features() {
+        // Verify that fbank extraction still works on denoised audio
+        let samples: Vec<f32> = (0..32_000)
+            .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin() * 0.5)
+            .collect();
+        let denoised = denoise(&samples);
+        let features = compute_fbank(&denoised).unwrap();
+        assert_eq!(features.shape()[1], 80);
+        assert!(features.shape()[0] > 50, "should produce frames from denoised audio");
     }
 
     #[test]

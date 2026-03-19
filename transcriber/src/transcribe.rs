@@ -194,6 +194,7 @@ pub fn transcribe_samples(
         model: options.model.name().to_string(),
         source_url: None,
         source_title: None,
+        speaker_summary: None,
     })
 }
 

@@ -100,6 +100,7 @@ fn output_formats_roundtrip() {
         model: "tiny".into(),
         source_url: None,
         source_title: None,
+        speaker_summary: None,
     };
 
     // SRT

@@ -593,30 +593,114 @@ fn cmd_speakers_remove(name: String, profiles: Option<PathBuf>) {
     }
 }
 
-/// Print a summary of speaker identification results.
+/// Print a detailed summary of speaker identification results.
 fn print_speaker_summary(transcript: &transcriber::Transcript) {
     use std::collections::HashMap;
-    let mut counts: HashMap<&str, (u32, f32)> = HashMap::new();
+
+    struct SpeakerStats {
+        count: u32,
+        total_conf: f32,
+        total_duration: f64,
+        /// Confidence buckets: [<0.5, 0.5-0.7, 0.7-0.9, >=0.9]
+        buckets: [u32; 4],
+    }
+
+    let mut stats: HashMap<&str, SpeakerStats> = HashMap::new();
 
     for seg in &transcript.segments {
         if let Some(speaker) = &seg.speaker_id {
-            let entry = counts.entry(speaker.as_str()).or_insert((0, 0.0));
-            entry.0 += 1;
-            entry.1 += seg.speaker_confidence.unwrap_or(0.0);
+            let conf = seg.speaker_confidence.unwrap_or(0.0);
+            let duration = seg.end - seg.start;
+            let entry = stats.entry(speaker.as_str()).or_insert(SpeakerStats {
+                count: 0,
+                total_conf: 0.0,
+                total_duration: 0.0,
+                buckets: [0; 4],
+            });
+            entry.count += 1;
+            entry.total_conf += conf;
+            entry.total_duration += duration;
+
+            let bucket = if conf < 0.5 {
+                0
+            } else if conf < 0.7 {
+                1
+            } else if conf < 0.9 {
+                2
+            } else {
+                3
+            };
+            entry.buckets[bucket] += 1;
         }
     }
 
-    if counts.is_empty() {
+    if stats.is_empty() {
         return;
     }
 
     eprintln!("\nSpeaker summary:");
-    let mut sorted: Vec<_> = counts.iter().collect();
-    sorted.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
-    for (name, (count, total_conf)) in sorted {
-        let avg_conf = total_conf / *count as f32;
-        eprintln!("  {name}: {count} segments (avg confidence {avg_conf:.2})");
+    let mut sorted: Vec<_> = stats.iter().collect();
+    sorted.sort_by(|a, b| b.1.count.cmp(&a.1.count));
+    for (name, s) in &sorted {
+        let avg_conf = s.total_conf / s.count as f32;
+        let mins = (s.total_duration / 60.0) as u32;
+        let secs = (s.total_duration % 60.0) as u32;
+        eprintln!(
+            "  {name:<16} {count:>4} segments, {mins:>2}:{secs:02} speaking time, avg confidence {avg_conf:.2}",
+            name = name,
+            count = s.count,
+        );
+        // Only show confidence buckets for known speakers (not Unknown)
+        if **name != "Unknown" {
+            eprintln!(
+                "  {:<16} [<0.5: {}] [0.5-0.7: {}] [0.7-0.9: {}] [0.9+: {}]",
+                "",
+                s.buckets[0],
+                s.buckets[1],
+                s.buckets[2],
+                s.buckets[3],
+            );
+        }
     }
+
+    // Print post-processing stats from the summary
+    if let Some(summary) = &transcript.speaker_summary {
+        if summary.merged > 0 || summary.smoothed > 0 {
+            eprintln!(
+                "  Post-processing: {} segments merged, {} smoothed",
+                summary.merged, summary.smoothed,
+            );
+        }
+
+        // Re-enrollment suggestions
+        if !summary.unknown_clusters.is_empty() {
+            eprintln!("\nRe-enrollment suggestions:");
+            for (i, &(count, duration, start, end)) in
+                summary.unknown_clusters.iter().enumerate()
+            {
+                let mins = (duration / 60.0) as u32;
+                let secs = (duration % 60.0) as u32;
+                eprintln!(
+                    "  Unknown speaker {}: {} segments ({mins}:{secs:02} total)",
+                    (b'A' + i as u8) as char,
+                    count,
+                );
+                eprintln!(
+                    "    Suggest: transcriber-cli enroll --name \"<NAME>\" --audio <FILE> --start {} --end {}",
+                    format_time_suggestion(start),
+                    format_time_suggestion(end),
+                );
+            }
+        }
+    }
+}
+
+/// Format seconds as MM:SS for enrollment suggestions.
+fn format_time_suggestion(seconds: f64) -> String {
+    let total = seconds as u64;
+    let m = total / 60;
+    let s = total % 60;
+    format!("{m:02}:{s:02}")
 }
 
 /// Parse a time string like "01:23" or "83.5" into seconds.

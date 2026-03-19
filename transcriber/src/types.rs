@@ -35,6 +35,25 @@ pub struct Transcript {
     pub model: String,
     pub source_url: Option<String>,
     pub source_title: Option<String>,
+    /// Speaker identification summary (populated when `--speaker-id` is used).
+    /// Contains post-processing stats and unknown speaker cluster suggestions.
+    #[serde(skip)]
+    pub speaker_summary: Option<Box<SpeakerIdSummary>>,
+}
+
+/// Type-erased speaker identification summary.
+///
+/// This is a wrapper around `speaker::SpeakerSummary` that avoids feature-gating
+/// the `Transcript` struct fields. Use `downcast()` to access the inner type.
+#[derive(Debug, Clone)]
+pub struct SpeakerIdSummary {
+    pub identified: u32,
+    pub unknown: u32,
+    pub skipped: u32,
+    pub merged: u32,
+    pub smoothed: u32,
+    /// Each entry: (segment_count, total_duration, representative_start, representative_end)
+    pub unknown_clusters: Vec<(usize, f64, f64, f64)>,
 }
 
 impl Transcript {
@@ -155,6 +174,7 @@ mod tests {
             model: "large-v3".into(),
             source_url: Some("https://example.com/video".into()),
             source_title: Some("Test Video".into()),
+            speaker_summary: None,
         }
     }
 
@@ -173,6 +193,7 @@ mod tests {
             model: "tiny".into(),
             source_url: None,
             source_title: None,
+            speaker_summary: None,
         };
         assert_eq!(t.text(), "");
     }
@@ -195,6 +216,7 @@ mod tests {
             model: "tiny".into(),
             source_url: None,
             source_title: None,
+            speaker_summary: None,
         };
         assert_eq!(t.text(), "Just one segment.");
     }
@@ -221,6 +243,7 @@ mod tests {
             model: "tiny".into(),
             source_url: None,
             source_title: None,
+            speaker_summary: None,
         };
         assert_eq!(t.to_srt(), "");
     }
@@ -246,6 +269,7 @@ mod tests {
             model: "tiny".into(),
             source_url: None,
             source_title: None,
+            speaker_summary: None,
         };
         assert_eq!(t.to_vtt(), "WEBVTT\n\n");
     }
@@ -326,6 +350,7 @@ mod tests {
             model: "tiny".into(),
             source_url: None,
             source_title: None,
+            speaker_summary: None,
         };
         let srt = t.to_srt();
         for i in 1..=5 {

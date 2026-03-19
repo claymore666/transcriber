@@ -18,7 +18,7 @@ download = ["tokio/process", "tokio/fs"]
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 diarize = []
-speaker-id = ["dep:ort", "ort/ndarray", "dep:kaldi-native-fbank", "dep:ndarray"]
+speaker-id = ["dep:ort", "ort/ndarray", "dep:kaldi-native-fbank", "dep:ndarray", "dep:nnnoiseless"]
 
 [dependencies]
 whisper-rs = "0.15"
@@ -34,6 +34,7 @@ futures-util = "0.3"
 ort = { version = "2.0.0-rc.12", optional = true }
 kaldi-native-fbank = { version = "0.1", optional = true }
 ndarray = { version = "0.17", optional = true }
+nnnoiseless = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
